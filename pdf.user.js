@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.0
+// @version      1.5.1
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -57,20 +57,18 @@
         };
 
         if (isMangaPage) {
-            const boundButtons = new WeakSet();
+            const readerHandlers = new WeakMap();
 
             const bindReaderButton = function (button) {
                 if (
                     !button ||
-                    boundButtons.has(button) ||
+                    readerHandlers.has(button) ||
                     button.value !== 'Click here to read'
                 ) {
                     return;
                 }
 
-                boundButtons.add(button);
-
-                button.onclick = function () {
+                const handler = function () {
                     const select = document.querySelector('select.vi13');
                     if (!select || !select.value) {
                         return false;
@@ -192,6 +190,9 @@
                     tryDecode();
                     return false;
                 };
+
+                readerHandlers.set(button, handler);
+                button.onclick = handler;
             };
 
             const bindReaderButtons = function () {
@@ -216,6 +217,26 @@
             } else {
                 startObserver();
             }
+            document.addEventListener('click', function (event) {
+                const target = event.target;
+                const button = target && typeof target.closest === 'function'
+                    ? target.closest('input.vi12')
+                    : null;
+
+                if (!button || button.value !== 'Click here to read') return;
+
+                let handler = readerHandlers.get(button);
+                if (!handler) {
+                    bindReaderButton(button);
+                    handler = readerHandlers.get(button);
+                }
+
+                if (!handler) return;
+
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                handler();
+            }, true);
         }
 
         document.addEventListener('click', function (event) {
@@ -303,6 +324,8 @@
         });
     }
 })();
+
+
 
 
 
