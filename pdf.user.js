@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.9
+// @version      1.5.0
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -77,14 +77,24 @@
                     }
 
                     const firstUrl = new URL(select.value, location.href).href;
-                    const child = window.open(firstUrl, '_blank');
+                    const child = nativeOpen.call(window, 'about:blank', '_blank');
                     if (!child) {
                         return false;
                     }
 
-                    let attempts = 0;
                     let retryCount = 0;
-                    let retrying = false;
+                    const retryDelays = [1500, 3000, 5000, 8000, 10000, 15000];
+
+                    const showStatus = function (message) {
+                        try {
+                            const doc = child.document;
+                            doc.open();
+                            doc.write('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PDF</title><style>body{margin:0;background:#fff;color:#222;font-family:sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center}.box{padding:32px;font-size:20px;line-height:1.7}.spin{font-size:36px;margin-bottom:12px}</style><div class="box"><div class="spin">…</div><div id="msg"></div></div>');
+                            const msg = doc.getElementById('msg');
+                            if (msg) msg.textContent = message;
+                            doc.close();
+                        } catch (e) {}
+                    };
 
                     const navigateChild = function (url) {
                         try {
@@ -96,74 +106,90 @@
                         }
                     };
 
-                    const retryDecode = function () {
-                        if (retrying || retryCount >= 3) return false;
-                        retrying = true;
-                        retryCount++;
-
-                        // Remove the visible 429 page immediately, then retry after
-                        // a short backoff in the same tab so no extra tabs accumulate.
+                    const extractViewerUrl = function (text, baseUrl) {
+                        if (!text) return '';
+                        const match = String(text).match(/(?:https?:\/\/[^"'<>\s]+|\/[^"'<>\s]+)\/pdf\/view332\/web\/viewer\.html\?file=[^"'<>\s]+/i);
+                        if (!match) return '';
                         try {
-                            child.location.replace('about:blank');
-                        } catch (e) {}
-
-                        const delay = retryCount * 1500;
-                        setTimeout(function () {
-                            retrying = false;
-                            navigateChild(firstUrl);
-                        }, delay);
-                        return true;
+                            return new URL(match[0].replace(/&amp;/g, '&'), baseUrl).href;
+                        } catch (e) {
+                            return '';
+                        }
                     };
 
-                    const advanceWhenReady = function () {
-                        if (retrying) {
-                            setTimeout(advanceWhenReady, 100);
-                            return;
-                        }
-
+                    const tryDecode = async function () {
                         try {
                             if (child.closed) return;
                         } catch (e) {
                             return;
                         }
 
+                        showStatus(retryCount === 0 ? 'PDFを準備しています…' : 'PDFを準備しています… 再試行中');
+
                         try {
-                            const childUrl = new URL(child.location.href, location.href);
-                            if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
+                            const response = await fetch(firstUrl, {
+                                credentials: 'include',
+                                cache: 'no-store',
+                                redirect: 'follow'
+                            });
+
+                            if (response.status === 429) {
+                                if (retryCount < retryDelays.length) {
+                                    const delay = retryDelays[retryCount++];
+                                    setTimeout(tryDecode, delay);
+                                } else {
+                                    showStatus('アクセスが混み合っています。少し時間を空けてから、もう一度お試しください。');
+                                }
                                 return;
                             }
 
-                            const bodyText = child.document && child.document.body
-                                ? String(child.document.body.innerText || '')
-                                : '';
-                            if (/HTTP\s+ERROR\s+429|Too\s+Many\s+Requests/i.test(bodyText)) {
-                                if (retryDecode()) {
-                                    setTimeout(advanceWhenReady, 100);
-                                    return;
+                            const finalUrl = response.url || firstUrl;
+                            if (/\/pdf\/view332\/web\/viewer\.html(?:\?|$)/.test(finalUrl)) {
+                                navigateChild(finalUrl);
+                                return;
+                            }
+
+                            const html = await response.text();
+
+                            let nextUrl = firstUrl;
+                            try {
+                                const currentSelect = document.querySelector('select.vi13');
+                                if (currentSelect && currentSelect.value) {
+                                    nextUrl = new URL(currentSelect.value, location.href).href;
                                 }
+                            } catch (e) {}
+
+                            if (nextUrl !== firstUrl) {
+                                navigateChild(nextUrl);
+                                return;
                             }
-                        } catch (e) {}
 
-                        let nextUrl = firstUrl;
-                        try {
-                            const currentSelect = document.querySelector('select.vi13');
-                            if (currentSelect && currentSelect.value) {
-                                nextUrl = new URL(currentSelect.value, location.href).href;
+                            const viewerUrl = extractViewerUrl(html, finalUrl);
+                            if (viewerUrl) {
+                                navigateChild(viewerUrl);
+                                return;
                             }
-                        } catch (e) {}
 
-                        if (nextUrl !== firstUrl) {
-                            navigateChild(nextUrl);
-                            return;
-                        }
-
-                        attempts++;
-                        if (attempts < 400) {
-                            setTimeout(advanceWhenReady, 50);
+                            try {
+                                const doc = child.document;
+                                doc.open();
+                                doc.write('<base href="' + finalUrl.replace(/"/g, '&quot;') + '">' + html);
+                                doc.close();
+                            } catch (e) {
+                                navigateChild(finalUrl);
+                            }
+                        } catch (e) {
+                            if (retryCount < retryDelays.length) {
+                                const delay = retryDelays[retryCount++];
+                                setTimeout(tryDecode, delay);
+                            } else {
+                                showStatus('PDFの準備に失敗しました。少し時間を空けてから、もう一度お試しください。');
+                            }
                         }
                     };
 
-                    setTimeout(advanceWhenReady, 50);
+                    showStatus('PDFを準備しています…');
+                    tryDecode();
                     return false;
                 };
             };
@@ -277,5 +303,6 @@
         });
     }
 })();
+
 
 
