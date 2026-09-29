@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.4
+// @version      1.4.5
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -28,6 +28,9 @@
         }
     };
 
+    // Site-wide popup guard. Other popup blockers may overwrite window.open
+    // later, so the manga-reader handshake is patched again only for the
+    // actual trusted click below.
     window.open = function (url, target, features) {
         let value = '';
         try {
@@ -41,118 +44,121 @@
             return null;
         }
 
-        let parsed = null;
-        try {
-            parsed = new URL(value, location.href);
-        } catch (e) {}
-
-        if (
-            isMangaPage &&
-            parsed &&
-            parsed.pathname === '/decode.php' &&
-            isSameSite(parsed.href)
-        ) {
-            const child = nativeOpen.call(window, url, target, features);
-            if (!child) return child;
-
-            const firstUrl = parsed.href;
-            let advanced = false;
-
-            const advanceToViewer = function () {
-                if (advanced) return;
-
-                try {
-                    if (child.closed) return;
-                } catch (e) {
-                    return;
-                }
-
-                try {
-                    const childUrl = new URL(child.location.href, location.href);
-                    if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
-                        advanced = true;
-                        return;
-                    }
-                } catch (e) {}
-
-                let nextValue = firstUrl;
-                try {
-                    const select = document.querySelector('select.vi13');
-                    if (select && select.value) {
-                        nextValue = new URL(select.value, location.href).href;
-                    }
-                } catch (e) {}
-
-                advanced = true;
-                try {
-                    child.location.replace(nextValue);
-                } catch (e) {
-                    try {
-                        child.location.href = nextValue;
-                    } catch (_) {}
-                }
-            };
-
-            const waitForNextDecode = function (attempt) {
-                if (advanced) return;
-
-                try {
-                    if (child.closed) return;
-                } catch (e) {
-                    return;
-                }
-
-                try {
-                    const childUrl = new URL(child.location.href, location.href);
-                    if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
-                        advanced = true;
-                        return;
-                    }
-                } catch (e) {}
-
-                let nextValue = firstUrl;
-                try {
-                    const select = document.querySelector('select.vi13');
-                    if (select && select.value) {
-                        nextValue = new URL(select.value, location.href).href;
-                    }
-                } catch (e) {}
-
-                // Do not hit the same decode token twice. Wait until the page
-                // has actually replaced it with the next token.
-                if (nextValue !== firstUrl) {
-                    advanced = true;
-                    try {
-                        child.location.replace(nextValue);
-                    } catch (e) {
-                        try {
-                            child.location.href = nextValue;
-                        } catch (_) {}
-                    }
-                    return;
-                }
-
-                // Keep waiting without issuing another decode request.
-                // Five seconds is long enough for the site's token handoff.
-                if (attempt < 50) {
-                    setTimeout(function () {
-                        waitForNextDecode(attempt + 1);
-                    }, 100);
-                }
-            };
-
-            setTimeout(function () {
-                waitForNextDecode(0);
-            }, 250);
-            return child;
-        }
-
         if (url && isSameSite(url)) {
             return nativeOpen.call(window, url, target, features);
         }
 
         return null;
     };
+
+    if (isMangaPage) {
+        document.addEventListener('click', function (event) {
+            const button = event.target instanceof Element
+                ? event.target.closest('input.vi12')
+                : null;
+
+            if (
+                !button ||
+                button.value !== 'Click here to read' ||
+                !String(button.getAttribute('onclick') || '').includes('clickBtn1')
+            ) {
+                return;
+            }
+
+            // Patch only the window.open call made by the site's real click
+            // handler. This keeps Chrome's trusted user-activation path intact
+            // even when another popup blocker has replaced window.open.
+            const beforeOpen = window.open;
+
+            const patchedOpen = function (url, target, features) {
+                if (window.open === patchedOpen) {
+                    window.open = beforeOpen;
+                }
+
+                let parsed = null;
+                try {
+                    parsed = new URL(String(url || ''), location.href);
+                } catch (e) {}
+
+                if (
+                    !parsed ||
+                    parsed.pathname !== '/decode.php' ||
+                    !isSameSite(parsed.href)
+                ) {
+                    return beforeOpen.apply(this, arguments);
+                }
+
+                const child = beforeOpen.call(window, url, target, features);
+                if (!child) {
+                    return child;
+                }
+
+                const firstUrl = parsed.href;
+                let finished = false;
+                let attempts = 0;
+
+                const advanceWhenReady = function () {
+                    if (finished) return;
+
+                    try {
+                        if (child.closed) {
+                            finished = true;
+                            return;
+                        }
+                    } catch (e) {
+                        finished = true;
+                        return;
+                    }
+
+                    try {
+                        const childUrl = new URL(child.location.href, location.href);
+                        if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
+                            finished = true;
+                            return;
+                        }
+                    } catch (e) {}
+
+                    let nextUrl = firstUrl;
+                    try {
+                        const select = document.querySelector('select.vi13');
+                        if (select && select.value) {
+                            nextUrl = new URL(select.value, location.href).href;
+                        }
+                    } catch (e) {}
+
+                    if (nextUrl !== firstUrl) {
+                        finished = true;
+                        try {
+                            child.location.replace(nextUrl);
+                        } catch (e) {
+                            try {
+                                child.location.href = nextUrl;
+                            } catch (_) {}
+                        }
+                        return;
+                    }
+
+                    attempts++;
+                    if (attempts < 200) {
+                        setTimeout(advanceWhenReady, 25);
+                    }
+                };
+
+                setTimeout(advanceWhenReady, 25);
+                return child;
+            };
+
+            window.open = patchedOpen;
+
+            // If the site does not call window.open for some reason, restore
+            // the previous implementation after this click finishes.
+            setTimeout(function () {
+                if (window.open === patchedOpen) {
+                    window.open = beforeOpen;
+                }
+            }, 0);
+        }, true);
+    }
 
     document.addEventListener('click', function (event) {
         const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
