@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.1
+// @version      1.5.2
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -36,6 +36,97 @@
             }
         };
 
+        const openDecodeSafely = function (firstUrl, target, features) {
+            const child = nativeOpen.call(window, 'about:blank', target || '_blank', features);
+            if (!child) return child;
+
+            let retryCount = 0;
+            const retryDelays = [1500, 3000, 5000, 8000, 10000, 15000];
+
+            const showStatus = function (message) {
+                try {
+                    const doc = child.document;
+                    doc.open();
+                    doc.write('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PDF</title><style>body{margin:0;background:#fff;color:#222;font-family:sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center}.box{padding:32px;font-size:20px;line-height:1.7}.spin{font-size:36px;margin-bottom:12px}</style><div class="box"><div class="spin">…</div><div id="msg"></div></div>');
+                    const msg = doc.getElementById('msg');
+                    if (msg) msg.textContent = message;
+                    doc.close();
+                } catch (e) {}
+            };
+
+            const navigateChild = function (url) {
+                try {
+                    child.location.replace(url);
+                } catch (e) {
+                    try { child.location.href = url; } catch (_) {}
+                }
+            };
+
+            const tryDecode = async function () {
+                try { if (child.closed) return; } catch (e) { return; }
+                showStatus(retryCount === 0 ? 'PDFを準備しています…' : 'PDFを準備しています… 再試行中');
+
+                try {
+                    const response = await fetch(firstUrl, {
+                        credentials: 'include',
+                        cache: 'no-store',
+                        redirect: 'follow'
+                    });
+
+                    if (response.status === 429) {
+                        if (retryCount < retryDelays.length) {
+                            const delay = retryDelays[retryCount++];
+                            setTimeout(tryDecode, delay);
+                        } else {
+                            showStatus('アクセスが混み合っています。少し時間を空けてから、もう一度お試しください。');
+                        }
+                        return;
+                    }
+
+                    const finalUrl = response.url || firstUrl;
+                    if (/\/pdf\/view332\/web\/viewer\.html(?:\?|$)/.test(finalUrl)) {
+                        navigateChild(finalUrl);
+                        return;
+                    }
+
+                    const html = await response.text();
+
+                    let nextUrl = firstUrl;
+                    try {
+                        const currentSelect = document.querySelector('select.vi13');
+                        if (currentSelect && currentSelect.value) {
+                            nextUrl = new URL(currentSelect.value, location.href).href;
+                        }
+                    } catch (e) {}
+
+                    if (nextUrl !== firstUrl) {
+                        navigateChild(nextUrl);
+                        return;
+                    }
+
+                    try {
+                        const doc = child.document;
+                        doc.open();
+                        doc.write('<base href="' + finalUrl.replace(/"/g, '&quot;') + '">' + html);
+                        doc.close();
+                    } catch (e) {
+                        navigateChild(finalUrl);
+                    }
+                } catch (e) {
+                    if (retryCount < retryDelays.length) {
+                        const delay = retryDelays[retryCount++];
+                        setTimeout(tryDecode, delay);
+                    } else {
+                        showStatus('PDFの準備に失敗しました。少し時間を空けてから、もう一度お試しください。');
+                    }
+                }
+            };
+
+            showStatus('PDFを準備しています…');
+            tryDecode();
+            return child;
+        };
+
         window.open = function (url, target, features) {
             let value = '';
             try {
@@ -47,6 +138,20 @@
                 (value === 'window.location.href' || value.endsWith('/manga/window.location.href'))
             ) {
                 return null;
+            }
+
+            let parsed = null;
+            try {
+                parsed = new URL(value, location.href);
+            } catch (e) {}
+
+            if (
+                isMangaPage &&
+                parsed &&
+                parsed.pathname === '/decode.php' &&
+                isSameSite(parsed.href)
+            ) {
+                return openDecodeSafely(parsed.href, target, features);
             }
 
             if (url && isSameSite(url)) {
@@ -324,6 +429,7 @@
         });
     }
 })();
+
 
 
 
