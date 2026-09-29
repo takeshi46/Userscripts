@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.3
+// @version      1.4.4
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -93,7 +93,57 @@
                 }
             };
 
-            setTimeout(advanceToViewer, 300);
+            const waitForNextDecode = function (attempt) {
+                if (advanced) return;
+
+                try {
+                    if (child.closed) return;
+                } catch (e) {
+                    return;
+                }
+
+                try {
+                    const childUrl = new URL(child.location.href, location.href);
+                    if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
+                        advanced = true;
+                        return;
+                    }
+                } catch (e) {}
+
+                let nextValue = firstUrl;
+                try {
+                    const select = document.querySelector('select.vi13');
+                    if (select && select.value) {
+                        nextValue = new URL(select.value, location.href).href;
+                    }
+                } catch (e) {}
+
+                // Do not hit the same decode token twice. Wait until the page
+                // has actually replaced it with the next token.
+                if (nextValue !== firstUrl) {
+                    advanced = true;
+                    try {
+                        child.location.replace(nextValue);
+                    } catch (e) {
+                        try {
+                            child.location.href = nextValue;
+                        } catch (_) {}
+                    }
+                    return;
+                }
+
+                // Keep waiting without issuing another decode request.
+                // Five seconds is long enough for the site's token handoff.
+                if (attempt < 50) {
+                    setTimeout(function () {
+                        waitForNextDecode(attempt + 1);
+                    }, 100);
+                }
+            };
+
+            setTimeout(function () {
+                waitForNextDecode(0);
+            }, 250);
             return child;
         }
 
