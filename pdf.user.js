@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.6
+// @version      1.4.7
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -55,116 +55,69 @@
             if (
                 !button ||
                 boundButtons.has(button) ||
-                button.value !== 'Click here to read' ||
-                !String(button.getAttribute('onclick') || '').includes('clickBtn1')
+                button.value !== 'Click here to read'
             ) {
                 return;
             }
 
             boundButtons.add(button);
 
-            // Attach directly to the button in capture phase. Document-level
-            // popup blockers have already run by the time this executes, while
-            // the site's inline onclick has not run yet.
-            button.addEventListener('click', function () {
-                const beforeOpen = window.open;
+            // Replace the site's inline click handler itself. This runs after
+            // document-level popup blockers have finished their capture phase,
+            // while still preserving Chrome's real trusted user activation.
+            button.onclick = function () {
+                const select = document.querySelector('select.vi13');
+                if (!select || !select.value) {
+                    return false;
+                }
 
-                const patchedOpen = function (url, target, features) {
-                    if (window.open === patchedOpen) {
-                        window.open = beforeOpen;
-                    }
+                const firstUrl = new URL(select.value, location.href).href;
+                const child = window.open(firstUrl, '_blank');
+                if (!child) {
+                    return false;
+                }
 
-                    let parsed = null;
+                let attempts = 0;
+
+                const advanceWhenReady = function () {
+                    let nextUrl = firstUrl;
+
                     try {
-                        parsed = new URL(String(url || ''), location.href);
+                        const currentSelect = document.querySelector('select.vi13');
+                        if (currentSelect && currentSelect.value) {
+                            nextUrl = new URL(currentSelect.value, location.href).href;
+                        }
                     } catch (e) {}
 
-                    if (
-                        !parsed ||
-                        parsed.pathname !== '/decode.php' ||
-                        !isSameSite(parsed.href)
-                    ) {
-                        return beforeOpen.apply(this, arguments);
-                    }
-
-                    const child = beforeOpen.call(window, url, target, features);
-                    if (!child) {
-                        return child;
-                    }
-
-                    const firstUrl = parsed.href;
-                    let finished = false;
-                    let attempts = 0;
-
-                    const advanceWhenReady = function () {
-                        if (finished) return;
-
+                    if (nextUrl !== firstUrl) {
                         try {
-                            if (child.closed) {
-                                finished = true;
-                                return;
-                            }
+                            child.location.replace(nextUrl);
                         } catch (e) {
-                            finished = true;
-                            return;
-                        }
-
-                        try {
-                            const childUrl = new URL(child.location.href, location.href);
-                            if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
-                                finished = true;
-                                return;
-                            }
-                        } catch (e) {}
-
-                        let nextUrl = firstUrl;
-                        try {
-                            const select = document.querySelector('select.vi13');
-                            if (select && select.value) {
-                                nextUrl = new URL(select.value, location.href).href;
-                            }
-                        } catch (e) {}
-
-                        if (nextUrl !== firstUrl) {
-                            finished = true;
                             try {
-                                child.location.replace(nextUrl);
-                            } catch (e) {
-                                try {
-                                    child.location.href = nextUrl;
-                                } catch (_) {}
-                            }
-                            return;
+                                child.location.href = nextUrl;
+                            } catch (_) {}
                         }
+                        return;
+                    }
 
-                        attempts++;
-                        if (attempts < 200) {
-                            setTimeout(advanceWhenReady, 25);
-                        }
-                    };
-
-                    setTimeout(advanceWhenReady, 25);
-                    return child;
+                    attempts++;
+                    if (attempts < 200) {
+                        setTimeout(advanceWhenReady, 25);
+                    }
                 };
 
-                window.open = patchedOpen;
-
-                setTimeout(function () {
-                    if (window.open === patchedOpen) {
-                        window.open = beforeOpen;
-                    }
-                }, 0);
-            }, true);
+                setTimeout(advanceWhenReady, 25);
+                return false;
+            };
         };
 
         const bindReaderButtons = function () {
             document.querySelectorAll('input.vi12').forEach(bindReaderButton);
         };
 
-        document.addEventListener('DOMContentLoaded', bindReaderButtons, { once: true });
-
         const startObserver = function () {
             bindReaderButtons();
+
             const root = document.documentElement;
             if (!root) return;
 
