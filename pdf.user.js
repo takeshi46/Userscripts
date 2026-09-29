@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.8
+// @version      1.4.9
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -83,10 +83,68 @@
                     }
 
                     let attempts = 0;
+                    let retryCount = 0;
+                    let retrying = false;
+
+                    const navigateChild = function (url) {
+                        try {
+                            child.location.replace(url);
+                        } catch (e) {
+                            try {
+                                child.location.href = url;
+                            } catch (_) {}
+                        }
+                    };
+
+                    const retryDecode = function () {
+                        if (retrying || retryCount >= 3) return false;
+                        retrying = true;
+                        retryCount++;
+
+                        // Remove the visible 429 page immediately, then retry after
+                        // a short backoff in the same tab so no extra tabs accumulate.
+                        try {
+                            child.location.replace('about:blank');
+                        } catch (e) {}
+
+                        const delay = retryCount * 1500;
+                        setTimeout(function () {
+                            retrying = false;
+                            navigateChild(firstUrl);
+                        }, delay);
+                        return true;
+                    };
 
                     const advanceWhenReady = function () {
-                        let nextUrl = firstUrl;
+                        if (retrying) {
+                            setTimeout(advanceWhenReady, 100);
+                            return;
+                        }
 
+                        try {
+                            if (child.closed) return;
+                        } catch (e) {
+                            return;
+                        }
+
+                        try {
+                            const childUrl = new URL(child.location.href, location.href);
+                            if (/\/pdf\/view332\/web\/viewer\.html$/.test(childUrl.pathname)) {
+                                return;
+                            }
+
+                            const bodyText = child.document && child.document.body
+                                ? String(child.document.body.innerText || '')
+                                : '';
+                            if (/HTTP\s+ERROR\s+429|Too\s+Many\s+Requests/i.test(bodyText)) {
+                                if (retryDecode()) {
+                                    setTimeout(advanceWhenReady, 100);
+                                    return;
+                                }
+                            }
+                        } catch (e) {}
+
+                        let nextUrl = firstUrl;
                         try {
                             const currentSelect = document.querySelector('select.vi13');
                             if (currentSelect && currentSelect.value) {
@@ -95,23 +153,17 @@
                         } catch (e) {}
 
                         if (nextUrl !== firstUrl) {
-                            try {
-                                child.location.replace(nextUrl);
-                            } catch (e) {
-                                try {
-                                    child.location.href = nextUrl;
-                                } catch (_) {}
-                            }
+                            navigateChild(nextUrl);
                             return;
                         }
 
                         attempts++;
-                        if (attempts < 200) {
-                            setTimeout(advanceWhenReady, 25);
+                        if (attempts < 400) {
+                            setTimeout(advanceWhenReady, 50);
                         }
                     };
 
-                    setTimeout(advanceWhenReady, 25);
+                    setTimeout(advanceWhenReady, 50);
                     return false;
                 };
             };
@@ -225,3 +277,5 @@
         });
     }
 })();
+
+
