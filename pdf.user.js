@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.4.7
+// @version      1.4.8
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -15,181 +15,213 @@
 (function () {
     'use strict';
 
-    const nativeOpen = window.open;
-    const isMangaPage = /\/manga\//.test(location.pathname);
+    function pageMain() {
+        'use strict';
 
-    const isSameSite = function (value) {
-        if (!value) return false;
-        try {
-            const url = new URL(value, location.href);
-            return url.hostname === 'pdftoshokan.com' || url.hostname.endsWith('.pdftoshokan.com');
-        } catch (e) {
-            return false;
+        if (window.__pdfAdguardMainV148) {
+            return;
         }
-    };
+        window.__pdfAdguardMainV148 = true;
 
-    window.open = function (url, target, features) {
-        let value = '';
-        try {
-            value = String(url || '');
-        } catch (e) {}
+        const nativeOpen = window.open;
+        const isMangaPage = /\/manga\//.test(location.pathname);
 
-        if (
-            isMangaPage &&
-            (value === 'window.location.href' || value.endsWith('/manga/window.location.href'))
-        ) {
-            return null;
-        }
+        const isSameSite = function (value) {
+            if (!value) return false;
+            try {
+                const url = new URL(value, location.href);
+                return url.hostname === 'pdftoshokan.com' || url.hostname.endsWith('.pdftoshokan.com');
+            } catch (e) {
+                return false;
+            }
+        };
 
-        if (url && isSameSite(url)) {
-            return nativeOpen.call(window, url, target, features);
-        }
+        window.open = function (url, target, features) {
+            let value = '';
+            try {
+                value = String(url || '');
+            } catch (e) {}
 
-        return null;
-    };
-
-    if (isMangaPage) {
-        const boundButtons = new WeakSet();
-
-        const bindReaderButton = function (button) {
             if (
-                !button ||
-                boundButtons.has(button) ||
-                button.value !== 'Click here to read'
+                isMangaPage &&
+                (value === 'window.location.href' || value.endsWith('/manga/window.location.href'))
             ) {
+                return null;
+            }
+
+            if (url && isSameSite(url)) {
+                return nativeOpen.call(window, url, target, features);
+            }
+
+            return null;
+        };
+
+        if (isMangaPage) {
+            const boundButtons = new WeakSet();
+
+            const bindReaderButton = function (button) {
+                if (
+                    !button ||
+                    boundButtons.has(button) ||
+                    button.value !== 'Click here to read'
+                ) {
+                    return;
+                }
+
+                boundButtons.add(button);
+
+                button.onclick = function () {
+                    const select = document.querySelector('select.vi13');
+                    if (!select || !select.value) {
+                        return false;
+                    }
+
+                    const firstUrl = new URL(select.value, location.href).href;
+                    const child = window.open(firstUrl, '_blank');
+                    if (!child) {
+                        return false;
+                    }
+
+                    let attempts = 0;
+
+                    const advanceWhenReady = function () {
+                        let nextUrl = firstUrl;
+
+                        try {
+                            const currentSelect = document.querySelector('select.vi13');
+                            if (currentSelect && currentSelect.value) {
+                                nextUrl = new URL(currentSelect.value, location.href).href;
+                            }
+                        } catch (e) {}
+
+                        if (nextUrl !== firstUrl) {
+                            try {
+                                child.location.replace(nextUrl);
+                            } catch (e) {
+                                try {
+                                    child.location.href = nextUrl;
+                                } catch (_) {}
+                            }
+                            return;
+                        }
+
+                        attempts++;
+                        if (attempts < 200) {
+                            setTimeout(advanceWhenReady, 25);
+                        }
+                    };
+
+                    setTimeout(advanceWhenReady, 25);
+                    return false;
+                };
+            };
+
+            const bindReaderButtons = function () {
+                document.querySelectorAll('input.vi12').forEach(bindReaderButton);
+            };
+
+            const startObserver = function () {
+                bindReaderButtons();
+
+                const root = document.documentElement;
+                if (!root) return;
+
+                const observer = new MutationObserver(bindReaderButtons);
+                observer.observe(root, {
+                    childList: true,
+                    subtree: true
+                });
+            };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+            } else {
+                startObserver();
+            }
+        }
+
+        document.addEventListener('click', function (event) {
+            const target = event.target;
+            const anchor = target && typeof target.closest === 'function'
+                ? target.closest('a[href]')
+                : null;
+
+            if (!anchor || anchor.target !== '_blank') return;
+
+            const href = anchor.getAttribute('href');
+            if (isSameSite(href)) {
+                anchor.target = '_self';
                 return;
             }
 
-            boundButtons.add(button);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }, true);
 
-            // Replace the site's inline click handler itself. This runs after
-            // document-level popup blockers have finished their capture phase,
-            // while still preserving Chrome's real trusted user activation.
-            button.onclick = function () {
-                const select = document.querySelector('select.vi13');
-                if (!select || !select.value) {
-                    return false;
+        document.addEventListener('submit', function (event) {
+            const form = event.target;
+            if (!form || String(form.tagName || '').toUpperCase() !== 'FORM' || form.target !== '_blank') {
+                return;
+            }
+
+            if (isSameSite(form.action)) {
+                form.target = '_self';
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }, true);
+
+        if (/\/pdf\/view332\/web\//.test(location.pathname)) {
+            function getStorageKey() {
+                const raw = navigator.userAgent + navigator.language;
+                let hash = 0;
+
+                for (let i = 0; i < raw.length; i++) {
+                    hash = ((hash << 5) - hash) + raw.charCodeAt(i);
+                    hash |= 0;
                 }
 
-                const firstUrl = new URL(select.value, location.href).href;
-                const child = window.open(firstUrl, '_blank');
-                if (!child) {
-                    return false;
-                }
+                return 'viewad_' + Math.abs(hash);
+            }
 
-                let attempts = 0;
+            const storageKey = getStorageKey();
 
-                const advanceWhenReady = function () {
-                    let nextUrl = firstUrl;
+            function refreshAdTimer() {
+                try {
+                    localStorage.setItem(storageKey, String(Date.now()));
+                } catch (e) {}
+            }
 
-                    try {
-                        const currentSelect = document.querySelector('select.vi13');
-                        if (currentSelect && currentSelect.value) {
-                            nextUrl = new URL(currentSelect.value, location.href).href;
-                        }
-                    } catch (e) {}
-
-                    if (nextUrl !== firstUrl) {
-                        try {
-                            child.location.replace(nextUrl);
-                        } catch (e) {
-                            try {
-                                child.location.href = nextUrl;
-                            } catch (_) {}
-                        }
-                        return;
-                    }
-
-                    attempts++;
-                    if (attempts < 200) {
-                        setTimeout(advanceWhenReady, 25);
-                    }
-                };
-
-                setTimeout(advanceWhenReady, 25);
-                return false;
-            };
-        };
-
-        const bindReaderButtons = function () {
-            document.querySelectorAll('input.vi12').forEach(bindReaderButton);
-        };
-
-        const startObserver = function () {
-            bindReaderButtons();
-
-            const root = document.documentElement;
-            if (!root) return;
-
-            const observer = new MutationObserver(bindReaderButtons);
-            observer.observe(root, {
-                childList: true,
-                subtree: true
-            });
-        };
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', startObserver, { once: true });
-        } else {
-            startObserver();
+            refreshAdTimer();
+            setInterval(refreshAdTimer, 60000);
         }
     }
 
-    document.addEventListener('click', function (event) {
-        const target = event.target;
-        const anchor = target && typeof target.closest === 'function'
-            ? target.closest('a[href]')
-            : null;
-
-        if (!anchor || anchor.target !== '_blank') return;
-
-        const href = anchor.getAttribute('href');
-        if (isSameSite(href)) {
-            anchor.target = '_self';
-            return;
+    const inject = function () {
+        const root = document.documentElement || document.head;
+        if (!root) {
+            return false;
         }
 
-        event.preventDefault();
-        event.stopImmediatePropagation();
-    }, true);
+        const script = document.createElement('script');
+        script.textContent = '(' + pageMain.toString() + ')();';
+        root.appendChild(script);
+        script.remove();
+        return true;
+    };
 
-    document.addEventListener('submit', function (event) {
-        const form = event.target;
-        if (!form || String(form.tagName || '').toUpperCase() !== 'FORM' || form.target !== '_blank') {
-            return;
-        }
-
-        if (isSameSite(form.action)) {
-            form.target = '_self';
-            return;
-        }
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-    }, true);
-
-    if (/\/pdf\/view332\/web\//.test(location.pathname)) {
-        function getStorageKey() {
-            const raw = navigator.userAgent + navigator.language;
-            let hash = 0;
-
-            for (let i = 0; i < raw.length; i++) {
-                hash = ((hash << 5) - hash) + raw.charCodeAt(i);
-                hash |= 0;
+    if (!inject()) {
+        const observer = new MutationObserver(function () {
+            if (inject()) {
+                observer.disconnect();
             }
+        });
 
-            return 'viewad_' + Math.abs(hash);
-        }
-
-        const storageKey = getStorageKey();
-
-        function refreshAdTimer() {
-            try {
-                localStorage.setItem(storageKey, String(Date.now()));
-            } catch (e) {}
-        }
-
-        refreshAdTimer();
-        setInterval(refreshAdTimer, 60000);
+        observer.observe(document, {
+            childList: true,
+            subtree: true
+        });
     }
 })();
