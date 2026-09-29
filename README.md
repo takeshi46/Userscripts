@@ -1,4 +1,4 @@
-# pdf-adguard
+# pdf
 
 PDF閲覧用の AdGuard ユーザースクリプトです。
 
@@ -13,7 +13,7 @@ PDF閲覧用の AdGuard ユーザースクリプトです。
 ## AdGuard 登録URL
 
 ```text
-https://raw.githubusercontent.com/takeshi46/pdf-adguard/main/pdf.user.js
+https://raw.githubusercontent.com/takeshi46/pdf/main/pdf.user.js
 ```
 
 AdGuard Android では、**設定 → 拡張機能 → 拡張機能を追加する → URLから追加** で上記URLを登録します。
@@ -24,4 +24,4 @@ AdGuard Android では、**設定 → 拡張機能 → 拡張機能を追加す�
 
 ## 現在のバージョン
 
-v1.4.2
+v1.4.3
