@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.4
+// @version      1.5.5
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/pdf
@@ -18,10 +18,10 @@
     function pageMain() {
         'use strict';
 
-        if (window.__pdfAdguardMainV148) {
+        if (window.__pdfAdguardMain) {
             return;
         }
-        window.__pdfAdguardMainV148 = true;
+        window.__pdfAdguardMain = true;
 
         const nativeOpen = window.open;
         const isMangaPage = /\/manga\//.test(location.pathname);
