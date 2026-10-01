@@ -4,8 +4,8 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.6.0
-// @description  横書き・上下スクロール（自動読み込み）と挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
+// @version      1.7.0
+// @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
 // @run-at       document-start
@@ -34,7 +34,7 @@
         try { sessionStorage.removeItem(targetKey); } catch {}
       } else if (data.type === 'pbv-index') {
         const merged = { images: [], ranges: [] };
-        mergeIndex(merged, savedIndex); mergeIndex(merged, data.index);
+        mergeIndex(merged, data.index); mergeIndex(merged, savedIndex);
         try { localStorage.setItem(`pbv-index:${id}`, JSON.stringify(merged)); } catch {}
       } else if (data.type === 'pbv-mark') {
         try { sessionStorage.setItem(key, JSON.stringify({ pg: url.searchParams.get('pg'), mode: data.mode === true })); } catch {}
@@ -99,7 +99,8 @@
       const before = anchors.filter(a => a.compareDocumentPosition(image) & 4).at(-1);
       if (!before) continue;
       // Googleの文字オフセットはDOMの文字数と一致しないため、挿絵直前の正式アンカーを使う。
-      result.images.push({ pg: before.id, order: order(before.id) });
+      const src = thumbSrc(image.getAttribute('src') || image.getAttribute('href') || image.getAttribute('xlink:href'));
+      result.images.push({ pg: before.id, order: order(before.id), src });
     }
     if (anchors.length) result.ranges.push([order(anchors[0].id), order(anchors.at(-1).id)]);
     return result;
@@ -109,13 +110,26 @@
     const value = match ? Number(match[1]) : /^GBS\.PP1(?:[._]|$)/.test(pg || '') ? 0 : null;
     return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
+  // サムネ用の画像URL。Google Booksのhttpsのみ許可し、保存値も同じ検証を通す。
+  function thumbSrc(value) {
+    if (typeof value !== 'string' || !value) return undefined;
+    try {
+      const url = new URL(value, 'https://play.google.com/books/');
+      return url.protocol === 'https:' && /^(play|books)\.google\.com$/.test(url.hostname) && url.href.length <= 1000
+        ? url.href : undefined;
+    } catch { return undefined; }
+  }
   function mergeIndex(index, saved) {
     if (!saved) return;
     for (const item of Array.isArray(saved.images) ? saved.images : []) {
       const pg = typeof item?.pg === 'string' ? item.pg.replace(/_\d+$/, '') : null;
       if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
-        && Number.isSafeInteger(item.order) && item.order >= 0 && order(item.pg) === item.order
-        && !index.images.some(i => i.pg.replace(/_\d+$/, '') === pg)) index.images.push({ pg, order: item.order });
+        && Number.isSafeInteger(item.order) && item.order >= 0 && order(item.pg) === item.order) {
+        // 先に統合した（新しい）URLを優先し、無い場合だけ補う。
+        const src = thumbSrc(item.src), have = index.images.find(i => i.pg.replace(/_\d+$/, '') === pg);
+        if (have) have.src ||= src;
+        else index.images.push({ pg, order: item.order, src });
+      }
     }
     for (const r of Array.isArray(saved.ranges) ? saved.ranges : []) {
       if (Array.isArray(r) && r.length === 2 && r.every(n => Number.isSafeInteger(n) && n >= 0)
@@ -167,9 +181,17 @@
     #pbv-images { position:fixed;left:12px;top:64px;z-index:2147483647;
       display:flex;flex-wrap:wrap;gap:6px;max-width:calc(100% - 160px); }
     #pbv-images[hidden] { display:none!important; }
-    #pbv-images button, #pbv-images select { padding:9px;border:1px solid #888;border-radius:8px;
+    #pbv-images button { padding:9px;border:1px solid #888;border-radius:8px;
       background:#fff;color:#222;cursor:pointer;font:14px sans-serif; }
-    #pbv-images button:disabled, #pbv-images select:disabled { opacity:0.5;cursor:default; }
+    #pbv-images button:disabled { opacity:0.5;cursor:default; }
+    #pbv-gallery { position:fixed;left:12px;top:110px;max-height:calc(100% - 122px);z-index:2147483647;
+      width:min(420px,calc(100% - 24px));box-sizing:border-box;overflow:auto;padding:8px;
+      display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;align-content:start;
+      background:#fff;border:1px solid #888;border-radius:8px; }
+    #pbv-gallery[hidden] { display:none!important; }
+    #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #ccc;
+      border-radius:6px;background:#fff;color:#222;cursor:pointer;font:12px sans-serif; }
+    #pbv-gallery img { width:100%;aspect-ratio:3/4;object-fit:cover;background:#eee; }
     #pbv-images span { align-self:center;font:14px sans-serif; }
     #pbv-pages .pbv-horizontal svg { display:block;width:100%!important;
       height:auto!important;max-width:100%; }
@@ -191,27 +213,43 @@
   imageTools.id = 'pbv-images';
   imageTools.hidden = false;
   imageTools.setAttribute('aria-label', '挿絵へ移動');
-  const list = document.createElement('select');
+  const list = document.createElement('button'), gallery = document.createElement('div');
   const cancel = document.createElement('button'), back = document.createElement('button');
   const status = document.createElement('span');
-  list.setAttribute('aria-label', '挿絵一覧');
+  gallery.id = 'pbv-gallery';
+  gallery.hidden = true;
   cancel.textContent = '調整停止'; back.textContent = '元の位置へ';
   cancel.disabled = back.disabled = true;
   status.setAttribute('role', 'status');
   imageTools.append(list, cancel, back, status);
-  document.body.append(imageTools);
+  document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
   let context, pendingJump, landing;
   let index = streamed;
   const seen = new Set();
   refresh = () => { saveIndex(); renderList(); };
-  // 取得済みの挿絵位置を一覧にする。選ぶとその挿絵へ直接移動する。
+  // 取得済みの挿絵位置をサムネ付きで一覧にする。押すとその挿絵へ直接移動する。
   function renderList() {
     const n = index.images.length;
-    if (list.options.length === n + 1) return;
-    list.replaceChildren(new Option(n ? `挿絵一覧（${n}件）` : '挿絵一覧（取得中…）', ''),
-      ...index.images.map((item, i) => new Option(`挿絵 ${i + 1}`, item.pg)));
+    list.textContent = n ? `挿絵一覧（${n}件）` : '挿絵一覧（取得中…）';
+    if (!gallery.hidden) fillGallery();
+  }
+  function fillGallery() {
+    const signature = index.images.map(item => item.pg + (item.src ? '+' : '')).join();
+    if (gallery.dataset.signature === signature) return;
+    gallery.dataset.signature = signature;
+    gallery.replaceChildren(...index.images.map((item, i) => {
+      const button = document.createElement('button');
+      button.dataset.pg = item.pg;
+      if (item.src) {
+        const img = new Image();
+        img.loading = 'lazy'; img.alt = ''; img.src = item.src;
+        button.append(img);
+      }
+      button.append(`挿絵 ${i + 1}`);
+      return button;
+    }));
   }
   function gotoImage(pg) {
     if (busy) return;
@@ -224,7 +262,7 @@
   }
   // 上下の端に近づいたら次・前のページを自動で読み込む。
   function fill() {
-    if (!active || busy) return;
+    if (!active || busy || landing) return;
     const top = view.scrollTop < 180, bottom = view.scrollHeight - view.scrollTop - view.clientHeight < 180;
     if (top && !ended[-1]) load(-1);
     else if (bottom && !ended[1]) load(1);
@@ -426,10 +464,15 @@
       lastScroll = 0;
     }
   });
-  list.addEventListener('change', () => {
-    const pg = list.value;
-    list.value = '';
-    if (pg) gotoImage(pg);
+  list.addEventListener('click', () => {
+    gallery.hidden = !gallery.hidden;
+    if (!gallery.hidden) fillGallery();
+  });
+  gallery.addEventListener('click', event => {
+    const pg = event.target.closest('button')?.dataset.pg;
+    if (!pg) return;
+    gallery.hidden = true;
+    gotoImage(pg);
   });
   cancel.addEventListener('click', () => finish('調整を停止しました'));
   back.addEventListener('click', () => {
