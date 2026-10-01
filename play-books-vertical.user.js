@@ -22,12 +22,17 @@
       const url = new URL(location.href), id = url.searchParams.get('id');
       if (!id) return;
       const key = `pbv-return:${id}`, modeKey = `pbv-mode:${id}`;
-      let bookmark, mode;
+      let bookmark, mode, savedIndex;
       try { bookmark = JSON.parse(sessionStorage.getItem(key) || 'null'); mode = sessionStorage.getItem(modeKey) === 'true'; } catch {}
+      try { savedIndex = JSON.parse(localStorage.getItem(`pbv-index:${id}`) || 'null'); } catch {}
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'pbv-context') {
-        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark }, event.origin);
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex }, event.origin);
+      } else if (data.type === 'pbv-index') {
+        const merged = { images: [], ranges: [] };
+        mergeIndex(merged, savedIndex); mergeIndex(merged, data.index);
+        try { localStorage.setItem(`pbv-index:${id}`, JSON.stringify(merged)); } catch {}
       } else if (data.type === 'pbv-mark') {
         try { sessionStorage.setItem(key, JSON.stringify({ pg: url.searchParams.get('pg'), mode: data.mode === true })); } catch {}
         event.source.postMessage({ type: 'pbv-marked', pg: url.searchParams.get('pg') }, event.origin);
@@ -151,13 +156,9 @@
   }
   function saveIndex() {
     if (!context) return;
-    try {
-      readIndex();
-      localStorage.setItem(`pbv-index:${context.id}`, JSON.stringify(index));
-    } catch {}
+    window.parent.postMessage({ type: 'pbv-index', index }, 'https://play.google.com');
   }
-  function readIndex() {
-    const saved = JSON.parse(localStorage.getItem(`pbv-index:${context.id}`) || 'null');
+  function mergeIndex(index, saved) {
     if (!saved) return;
     for (const item of Array.isArray(saved.images) ? saved.images : []) {
       if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
@@ -200,7 +201,7 @@
     }
     if (event.data?.type !== 'pbv-context') return;
     context = event.data;
-    try { readIndex(); } catch {}
+    mergeIndex(index, context.index);
     rememberImages();
     if (context.bookmark) back.disabled = false;
     if (context.mode && !active) toggle.click();
