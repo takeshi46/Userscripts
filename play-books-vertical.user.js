@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.7.2
+// @version      1.8.0
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -152,7 +152,7 @@
       padding:9px 14px;border:1px solid #888;border-radius:8px;background:#fff;
       color:#222;cursor:pointer;font:14px sans-serif; }
     #pbv-view { position:fixed;inset:56px 0 0;z-index:2147483646;
-      overflow:auto;background:#fff;overscroll-behavior:contain;overflow-anchor:none; }
+      overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
     #pbv-view[hidden] { display:none!important; }
     #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
@@ -174,7 +174,10 @@
     #pbv-pages .pbv-horizontal p { margin:0 0 0.7em!important;padding:0!important;
       text-indent:0!important;overflow-wrap:anywhere; }
     #pbv-pages .pbv-horizontal p:has(>br:only-child) { display:none!important; }
-    #pbv-pages .pbv-horizontal .gb-segment { font-size:18px!important; }
+    /* 文字色・書体・サイズ・背景はリーダーの設定を読み取って反映する（syncTheme） */
+    #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal .gb-segment {
+      color:var(--pbv-fg,inherit)!important;font-family:var(--pbv-font,inherit)!important; }
+    #pbv-pages .pbv-horizontal .gb-segment { font-size:var(--pbv-size,18px)!important; }
     #pbv-pages .pbv-horizontal [style*="display:none"],
     #pbv-pages .pbv-horizontal [style*="display: none"] { display:none!important; }
     #pbv-pages .pbv-horizontal img { max-width:100%;height:auto; }
@@ -216,14 +219,14 @@
   imageTools.hidden = false;
   imageTools.setAttribute('aria-label', '挿絵へ移動');
   const list = document.createElement('button'), gallery = document.createElement('div');
-  const cancel = document.createElement('button'), back = document.createElement('button');
+  const back = document.createElement('button');
   const status = document.createElement('span');
   gallery.id = 'pbv-gallery';
   gallery.hidden = true;
-  cancel.textContent = '調整停止'; back.textContent = '元の位置へ';
-  cancel.disabled = back.disabled = true;
+  back.textContent = '元の位置へ';
+  back.disabled = true;
   status.setAttribute('role', 'status');
-  imageTools.append(list, cancel, back, status);
+  imageTools.append(list, back, status);
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
@@ -336,10 +339,32 @@
         : String(Math.min(1, (view.clientWidth - 32) / Number(sheet.dataset.width)));
     }
   }
+  // リーダーが今表示している本文の文字色・書体・サイズ・背景を、縦表示へ反映する。
+  function syncTheme() {
+    const page = shown().find(p => p.querySelector('.gb-segment p'));
+    if (!page) return;
+    const text = [...page.querySelectorAll('.gb-segment p')]
+      .reduce((a, b) => b.textContent.length > a.textContent.length ? b : a);
+    const style = getComputedStyle(text), size = parseFloat(style.fontSize);
+    const rgb = c => c.match(/[\d.]+/g)?.map(Number) ?? [];
+    let bg;
+    for (let el = text; el && !bg; el = el.parentElement || el.getRootNode().host) {
+      const [r, g, b, a = 1] = rgb(getComputedStyle(el).backgroundColor);
+      if (r !== undefined && a > 0.5) bg = `rgb(${r}, ${g}, ${b})`;
+    }
+    const [r, g, b] = rgb(style.color);
+    // 背景が取れず文字が明るい場合は、読めなくならないよう暗い背景にする。
+    bg ||= (r + g + b) / 3 > 128 ? '#111' : '#fff';
+    view.style.setProperty('--pbv-bg', bg);
+    view.style.setProperty('--pbv-fg', style.color);
+    view.style.setProperty('--pbv-font', style.fontFamily);
+    if (size >= 10 && size <= 60) view.style.setProperty('--pbv-size', `${size}px`);
+  }
   function append() {
     rememberImages();
     if (adjustLanding()) return;
     if (!active) return;
+    syncTheme();
     const height = view.scrollHeight, top = view.scrollTop;
     const visible = shown();
     const signature = visible.map(p => p.id).join('|');
@@ -414,7 +439,6 @@
     pendingJump = null;
     busy = false;
     status.textContent = message;
-    cancel.disabled = true;
     list.disabled = false;
   }
   function adjustLanding() {
@@ -432,7 +456,7 @@
     }
     landing.signature = signature; landing.steps++;
     busy = true; direction = 1;
-    list.disabled = true; cancel.disabled = false;
+    list.disabled = true;
     status.textContent = '挿絵の表示位置を調整…';
     step();
     return true;
@@ -466,7 +490,6 @@
     clearTimeout(timeout);
     busy = false;
     pendingJump = null;
-    cancel.disabled = true;
     back.disabled = !context?.bookmark;
     status.textContent = '';
     list.disabled = false;
@@ -503,7 +526,6 @@
     if (original) original.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
     else status.textContent = 'このリンクは通常表示で開いてください';
   }, true);
-  cancel.addEventListener('click', () => finish('調整を停止しました'));
   back.addEventListener('click', () => {
     if (context) window.parent.postMessage({ type: 'pbv-return' }, 'https://play.google.com');
   });
@@ -531,5 +553,7 @@
     startup.observe(document.body, { childList: true, subtree: true });
   }
   window.addEventListener('resize', resize);
+  // ponytail: 配色変更はページ更新を伴わないことがあるため、縦表示中は1秒ごとに設定を読み直す。
+  setInterval(() => active && syncTheme(), 1000);
   }
 })();
