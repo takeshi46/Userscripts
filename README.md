@@ -4,7 +4,7 @@ AdGuardで使えるユーザースクリプト集です。
 
 ## Google Play ブックス：横書き・上下スクロール
 
-`play-books-vertical.user.js` — v1.7.0
+`play-books-vertical.user.js` — v1.7.1
 
 - 本文を横書きに変更し、ルビを保持
 - 上端・下端に近づくと前後のページを自動で読み込み（追加ボタンなし）
@@ -59,4 +59,4 @@ AdGuard Windows版では「拡張機能 → 拡張機能を追加 → ファイ�
 
 ## 現在のバージョン
 
-PDF: v1.5.7 / Play ブックス: v1.7.0
+PDF: v1.5.7 / Play ブックス: v1.7.1

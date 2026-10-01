@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.7.0
+// @version      1.7.1
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -184,10 +184,12 @@
     #pbv-images button { padding:9px;border:1px solid #888;border-radius:8px;
       background:#fff;color:#222;cursor:pointer;font:14px sans-serif; }
     #pbv-images button:disabled { opacity:0.5;cursor:default; }
-    #pbv-gallery { position:fixed;left:12px;top:110px;max-height:calc(100% - 122px);z-index:2147483647;
+    #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8;
+      border-bottom-left-radius:0;border-bottom-right-radius:0; }
+    #pbv-gallery { position:fixed;left:12px;top:104px;max-height:calc(100% - 116px);z-index:2147483647;
       width:min(420px,calc(100% - 24px));box-sizing:border-box;overflow:auto;padding:8px;
       display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;align-content:start;
-      background:#fff;border:1px solid #888;border-radius:8px; }
+      background:#fff;border:1px solid #1a73e8;border-radius:0 8px 8px 8px;box-shadow:0 4px 12px rgba(0,0,0,.25); }
     #pbv-gallery[hidden] { display:none!important; }
     #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #ccc;
       border-radius:6px;background:#fff;color:#222;cursor:pointer;font:12px sans-serif; }
@@ -225,14 +227,15 @@
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
-  let context, pendingJump, landing;
+  let context, pendingJump, landing, focusImage;
   let index = streamed;
   const seen = new Set();
   refresh = () => { saveIndex(); renderList(); };
   // 取得済みの挿絵位置をサムネ付きで一覧にする。押すとその挿絵へ直接移動する。
   function renderList() {
     const n = index.images.length;
-    list.textContent = n ? `挿絵一覧（${n}件）` : '挿絵一覧（取得中…）';
+    list.textContent = `${n ? `挿絵一覧（${n}件）` : '挿絵一覧（取得中…）'} ${gallery.hidden ? '▾' : '▴'}`;
+    list.setAttribute('aria-expanded', String(!gallery.hidden));
     if (!gallery.hidden) fillGallery();
   }
   function fillGallery() {
@@ -381,6 +384,12 @@
       list.disabled = false;
       if (status.textContent.startsWith('本文の読み込み')) status.textContent = '';
       resize();
+      if (focusImage) {
+        // 着地直後は、挿絵が画面に入るようにスクロールする。
+        focusImage = false;
+        const img = [...pages.querySelectorAll('img, svg')].find(el => el.getBoundingClientRect().width >= 200);
+        if (img) view.scrollTop += img.getBoundingClientRect().top - view.getBoundingClientRect().top - 64;
+      }
       if (direction === -1) view.scrollTop = top + view.scrollHeight - height;
       lastScroll = view.scrollTop;
       fill();
@@ -405,7 +414,7 @@
     const visible = shown();
     if (!visible.length || visible.length !== document.querySelectorAll('reader-pages reader-page.shown').length) return true;
     if (visible.some(page => [...page.querySelectorAll('img, svg image')].some(isIllustration))) {
-      finish('挿絵に移動しました'); status.textContent = '挿絵に移動しました'; return false;
+      finish('挿絵に移動しました'); focusImage = active; status.textContent = '挿絵に移動しました'; return false;
     }
     const signature = visible.map(page => page.id).join('|');
     if (signature === landing.signature) return true;
@@ -466,12 +475,13 @@
   });
   list.addEventListener('click', () => {
     gallery.hidden = !gallery.hidden;
-    if (!gallery.hidden) fillGallery();
+    renderList();
   });
   gallery.addEventListener('click', event => {
     const pg = event.target.closest('button')?.dataset.pg;
     if (!pg) return;
     gallery.hidden = true;
+    renderList();
     gotoImage(pg);
   });
   cancel.addEventListener('click', () => finish('調整を停止しました'));
