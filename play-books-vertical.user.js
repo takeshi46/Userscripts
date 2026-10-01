@@ -4,15 +4,43 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.3.0
-// @description  本文を横書きにして、現在位置から上下スクロールで読みます。ルビ対応。
+// @version      1.4.0
+// @description  本文を横書きで上下スクロール。通常表示でも挿絵へ移動し、探索済みの位置を保存。ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
+// @match        https://play.google.com/books/reader*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
 (() => {
   'use strict';
+  // 親ページだけが読書URLを操作する。iframeから渡されたURLは使用しない。
+  if (location.hostname === 'play.google.com') {
+    window.addEventListener('message', event => {
+      const frame = document.querySelector('iframe.-gb-display');
+      if (event.origin !== 'https://books.googleusercontent.com' || event.source !== frame?.contentWindow) return;
+      const url = new URL(location.href), id = url.searchParams.get('id');
+      if (!id) return;
+      const key = `pbv-return:${id}`, modeKey = `pbv-mode:${id}`;
+      let bookmark, mode;
+      try { bookmark = JSON.parse(sessionStorage.getItem(key) || 'null'); mode = sessionStorage.getItem(modeKey) === 'true'; } catch {}
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'pbv-context') {
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark }, event.origin);
+      } else if (data.type === 'pbv-mark') {
+        try { sessionStorage.setItem(key, JSON.stringify({ pg: url.searchParams.get('pg'), mode: data.mode === true })); } catch {}
+        event.source.postMessage({ type: 'pbv-marked', pg: url.searchParams.get('pg') }, event.origin);
+      } else if (data.type === 'pbv-goto' || data.type === 'pbv-return') {
+        const pg = data.type === 'pbv-return' ? bookmark?.pg : data.pg;
+        if (typeof pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(pg)) return;
+        try { sessionStorage.setItem(modeKey, String(data.type === 'pbv-return' ? bookmark.mode : data.mode === true)); } catch {}
+        url.searchParams.set('pg', pg);
+        location.assign(url.href);
+      }
+    });
+    return;
+  }
   if (document.getElementById('pbv-toggle')) return;
   const style = document.createElement('style');
   style.textContent = `
@@ -80,7 +108,7 @@
   document.body.append(toggle, view);
   const imageTools = document.createElement('nav');
   imageTools.id = 'pbv-images';
-  imageTools.hidden = true;
+  imageTools.hidden = false;
   imageTools.setAttribute('aria-label', '挿絵へ移動');
   const imagePrev = document.createElement('button'), imageNext = document.createElement('button');
   const cancel = document.createElement('button'), back = document.createElement('button');
@@ -93,7 +121,91 @@
   document.body.append(imageTools);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let seeking = false, origin = '', returnPosition;
+  let context, scanStart, pendingJump;
+  let index = { images: [], ranges: [] };
   const seen = new Set();
+
+  function order(pg) {
+    const match = /^GBS\.PT(\d+)(?:\.|$)/.exec(pg || '');
+    return match ? Number(match[1]) : /^GBS\.PP1(?:\.|$)/.test(pg || '') ? 0 : null;
+  }
+  function imageLocation(page) {
+    const image = [...page.querySelectorAll('img, svg image')].find(isIllustration);
+    if (!image) return null;
+    const anchors = [...page.querySelectorAll('[id]')].filter(a => /^GBS\./.test(a.id)
+      && (a.compareDocumentPosition(image) & 4));
+    const pg = anchors.at(-1)?.id || pageLocation(page);
+    return order(pg) === null ? null : { pg, order: order(pg) };
+  }
+  function isIllustration(img) {
+    const rect = img.getBoundingClientRect();
+    const clip = img.closest?.('reader-rendered-page')?.getBoundingClientRect();
+    if (clip) return Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left) >= 200
+      && Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top) >= 200;
+    return Math.max(rect.width, Number(img.getAttribute('width')) || 0, img.naturalWidth || 0) >= 200
+      && Math.max(rect.height, Number(img.getAttribute('height')) || 0, img.naturalHeight || 0) >= 200;
+  }
+  function pageLocation(page) {
+    return page.querySelector('.gb-segment')?.getAttribute('ocean-position')?.replace(/\+(\d+)$/, '_$1')
+      || page.querySelector('[id^="GBS."]')?.id || '';
+  }
+  function saveIndex() {
+    if (!context) return;
+    try {
+      readIndex();
+      localStorage.setItem(`pbv-index:${context.id}`, JSON.stringify(index));
+    } catch {}
+  }
+  function readIndex() {
+    const saved = JSON.parse(localStorage.getItem(`pbv-index:${context.id}`) || 'null');
+    if (!saved) return;
+    for (const item of Array.isArray(saved.images) ? saved.images : []) {
+      if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
+        && order(item.pg) === item.order && !index.images.some(i => i.pg === item.pg)) index.images.push(item);
+    }
+    for (const r of Array.isArray(saved.ranges) ? saved.ranges : []) {
+      if (Array.isArray(r) && r.length === 2 && r.every(n => Number.isSafeInteger(n) && n >= 0)
+        && r[0] <= r[1] && !index.ranges.some(i => i[0] === r[0] && i[1] === r[1])) index.ranges.push(r);
+    }
+    index.images.sort((a, b) => a.order - b.order);
+  }
+  function rememberImages() {
+    for (const page of document.querySelectorAll('reader-pages reader-page.-gb-loaded')) {
+      const found = imageLocation(page);
+      if (found && !index.images.some(item => item.pg === found.pg)) index.images.push(found);
+    }
+    index.images.sort((a, b) => a.order - b.order);
+    saveIndex();
+  }
+  function directTarget(start) {
+    const images = index.images.filter(item => Math.sign(item.order - start) === direction
+      && index.ranges.some(([low, high]) => low <= Math.min(start, item.order) && high >= Math.max(start, item.order)));
+    return direction === -1 ? images.at(-1) : images[0];
+  }
+  function located(page) {
+    const found = imageLocation(page);
+    if (found && scanStart !== null && scanStart !== undefined) {
+      index.ranges.push([Math.min(scanStart, found.order), Math.max(scanStart, found.order)]);
+      saveIndex();
+    }
+  }
+  window.addEventListener('message', event => {
+    if (event.origin !== 'https://play.google.com' || event.source !== window.parent) return;
+    if (event.data?.type === 'pbv-marked') {
+      clearTimeout(timeout);
+      const begin = pendingJump;
+      pendingJump = null;
+      begin?.();
+      return;
+    }
+    if (event.data?.type !== 'pbv-context') return;
+    context = event.data;
+    try { readIndex(); } catch {}
+    rememberImages();
+    if (context.bookmark) back.disabled = false;
+    if (context.mode && !active) toggle.click();
+  });
+  window.parent.postMessage({ type: 'pbv-context' }, 'https://play.google.com');
 
   function shown() {
     return [...document.querySelectorAll('reader-pages reader-page.shown')]
@@ -106,7 +218,17 @@
     }
   }
   function append() {
-    if (!active) return;
+    rememberImages();
+    if (!active) {
+      const visible = shown(), signature = visible.map(p => p.id).join('|');
+      if (seeking && signature && signature !== lastSignature) {
+        const target = visible.find(p => Math.sign(p.id.localeCompare(origin, undefined, { numeric: true })) === direction
+          && [...p.querySelectorAll('img, svg image')].some(isIllustration));
+        if (target) { located(target); finish('挿絵に移動しました'); }
+        else step();
+      }
+      return;
+    }
     const height = view.scrollHeight, top = view.scrollTop;
     const visible = shown();
     const signature = visible.map(p => p.id).join('|');
@@ -123,10 +245,8 @@
       sheet.dataset.width = String(rect.width);
       sheet.dataset.page = source.id;
       // ponytail: 200px以上の画像を挿絵と判定。画像主体の本では各ページが対象になる。
-      sheet.dataset.illustration = String([...source.querySelectorAll('img, svg image')].some(img => {
-        const rect = img.getBoundingClientRect();
-        return rect.width >= 200 && rect.height >= 200;
-      }));
+      sheet.dataset.illustration = String([...source.querySelectorAll('img, svg image')].some(isIllustration));
+      sheet.dataset.location = pageLocation(source);
       const segment = source.querySelector('.gb-segment');
       sheet.dataset.continues = String(/\+[1-9]\d*$/.test(segment?.getAttribute('ocean-position') || ''));
       sheet.style.cssText = `width:${rect.width}px;height:${rect.height}px;direction:${getComputedStyle(source).direction}`;
@@ -161,7 +281,11 @@
       lastScroll = view.scrollTop;
       if (seeking) {
         const target = findIllustration();
-        if (target) { finish('挿絵に移動しました'); scrollToSheet(target); }
+        if (target) {
+          const source = visible.find(p => p.id === target.dataset.page);
+          if (source) located(source);
+          finish('挿絵に移動しました'); scrollToSheet(target);
+        }
         else step();
       }
     } else if (busy && signature && signature !== lastSignature) {
@@ -170,6 +294,7 @@
   }
   function finish(message) {
     clearTimeout(timeout);
+    pendingJump = null;
     busy = false;
     if (seeking) status.textContent = message;
     seeking = false;
@@ -210,33 +335,49 @@
     return direction === -1 ? candidates.at(-1) : candidates[0];
   }
   function jumpIllustration(value) {
-    if (!active || busy) return;
-    const current = [...pages.children].find(sheet => sheet.getBoundingClientRect().bottom > view.getBoundingClientRect().top + 64)
-      || pages.children[0];
+    if (busy) return;
+    const current = active ? [...pages.children].find(sheet => sheet.getBoundingClientRect().bottom > view.getBoundingClientRect().top + 64)
+      || pages.children[0] : value === 1 ? shown().at(-1) : shown()[0];
     if (!current) { status.textContent = '本文の読み込みを待っています'; return; }
     direction = value;
-    origin = current.dataset.page;
-    returnPosition = { sheet: current, offset: view.getBoundingClientRect().top + 64 - current.getBoundingClientRect().top };
+    origin = active ? current.dataset.page : current.id;
+    returnPosition = active ? { sheet: current, offset: view.getBoundingClientRect().top + 64 - current.getBoundingClientRect().top } : null;
+    scanStart = order(active ? current.dataset.location : pageLocation(current));
     back.disabled = false;
-    const target = findIllustration();
-    if (target) { scrollToSheet(target); status.textContent = '挿絵に移動しました'; return; }
-    seeking = busy = true;
-    cancel.disabled = false;
-    prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = true;
-    status.textContent = '挿絵を探しています…';
-    // ponytail: 未読の挿絵は標準ページ送りで探索するため、遠い場合は時間がかかる。
-    step();
+    const begin = () => {
+      const target = active ? findIllustration() : null;
+      if (target) { scrollToSheet(target); status.textContent = '挿絵に移動しました'; busy = false; return; }
+      const direct = context && scanStart !== null ? directTarget(scanStart) : null;
+      if (direct) {
+        status.textContent = '記録済みの挿絵へ直接移動…';
+        window.parent.postMessage({ type: 'pbv-goto', pg: direct.pg, mode: active }, 'https://play.google.com');
+        return;
+      }
+      seeking = busy = true;
+      cancel.disabled = false;
+      prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = true;
+      status.textContent = '挿絵を探しています…';
+      // ponytail: 初めて読む範囲だけ標準ページ送りで探索し、記録済み範囲は直接移動する。
+      step();
+    };
+    if (context) {
+      busy = true;
+      pendingJump = begin;
+      window.parent.postMessage({ type: 'pbv-mark', mode: active }, 'https://play.google.com');
+      timeout = setTimeout(() => { pendingJump = null; finish('位置を保存できませんでした。再試行'); }, 3000);
+    } else begin();
   }
   toggle.addEventListener('click', () => {
     active = !active;
     view.hidden = !active;
-    imageTools.hidden = !active;
     toggle.textContent = active ? '通常表示に戻す' : '上下スクロール';
     toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
     seeking = false;
-    cancel.disabled = back.disabled = true;
+    pendingJump = null;
+    cancel.disabled = true;
+    back.disabled = !context?.bookmark;
     status.textContent = '';
     prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = false;
     if (active) {
@@ -257,7 +398,10 @@
   imageNext.addEventListener('click', () => jumpIllustration(1));
   cancel.addEventListener('click', () => finish('探索を停止しました'));
   back.addEventListener('click', () => {
-    if (!returnPosition) return;
+    if (!returnPosition) {
+      if (context) window.parent.postMessage({ type: 'pbv-return' }, 'https://play.google.com');
+      return;
+    }
     finish('元の位置に戻りました');
     status.textContent = '元の位置に戻りました';
     prev.textContent = '前のページを追加';
@@ -276,7 +420,8 @@
     if (!reader) return false;
     new MutationObserver(() => {
       clearTimeout(debounce);
-      debounce = setTimeout(append, 350);
+      // 読込完了したページだけを使い、探索中の待ち時間を短くする。
+      debounce = setTimeout(append, seeking ? 100 : 350);
     }).observe(reader, { childList: true, subtree: true, attributes: true, characterData: true });
     return true;
   }
@@ -288,4 +433,3 @@
   }
   window.addEventListener('resize', resize);
 })();
-
