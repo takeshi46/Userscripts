@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.5
+// @version      1.5.6
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
-// @homepageURL  https://github.com/takeshi46/pdf
-// @downloadURL  https://raw.githubusercontent.com/takeshi46/pdf/main/pdf.user.js
-// @updateURL    https://raw.githubusercontent.com/takeshi46/pdf/main/pdf.user.js
+// @homepageURL  https://github.com/takeshi46/userscripts
+// @downloadURL  https://raw.githubusercontent.com/takeshi46/userscripts/main/pdf.user.js
+// @updateURL    https://raw.githubusercontent.com/takeshi46/userscripts/main/pdf.user.js
 // @match        *://pdftoshokan.com/*
 // @match        *://*.pdftoshokan.com/*
 // @run-at       document-start
@@ -148,3 +148,4 @@
         });
     }
 })();
+
