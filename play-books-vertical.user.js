@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.2
+// @version      1.8.3
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -148,9 +148,10 @@
   if (document.getElementById('pbv-toggle')) return;
   const style = document.createElement('style');
   style.textContent = `
-    #pbv-view { position:fixed;inset:92px 0 0;z-index:2147483646;
+    #pbv-view { position:fixed;inset:56px 0 0;z-index:2147483646;
       overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
     #pbv-view[hidden] { display:none!important; }
+    #pbv-view.pbv-padded { inset:92px 0 0; }
     #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
     #pbv-pages > .pbv-sheet { flex:none;position:relative;display:block;
@@ -181,22 +182,19 @@
     /* 操作ボタンはリーダーのヘッダー直下の1行にまとめ、本文に重ねない（スマホ対応） */
     #pbv-images { position:fixed;left:0;right:0;top:56px;height:36px;z-index:2147483647;box-sizing:border-box;
       display:flex;align-items:center;gap:6px;padding:0 8px;pointer-events:none; }
-    #pbv-images.pbv-solid { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
     #pbv-images > * { pointer-events:auto; }
     #pbv-images button { flex:none;min-height:30px;padding:0 10px;border:1px solid #8886;border-radius:8px;
       background:var(--pbv-bg,#fff);color:var(--pbv-fg,#222);cursor:pointer;font:13px sans-serif;white-space:nowrap; }
     #pbv-images button:disabled { opacity:0.5;cursor:default; }
     #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
     #pbv-toggle { margin-left:auto; }
-    /* 通常表示では右下の小さな「☰」だけ。押したときだけ1行のバーを開き、本文に重ねない */
-    #pbv-menu { display:none!important;width:36px;height:36px;padding:0!important;border-radius:50%!important;opacity:.8; }
-    #pbv-images:not(.pbv-solid) #pbv-menu { display:block!important; }
-    #pbv-images:not(.pbv-solid):not(.pbv-open) { left:auto;right:6px;top:auto;bottom:60px;height:auto;padding:0; }
-    #pbv-images:not(.pbv-solid):not(.pbv-open) > :not(#pbv-menu) { display:none!important; }
-    #pbv-images.pbv-open:not(.pbv-solid) { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
-    #pbv-images span { flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-      padding:2px 6px;border-radius:6px;background:var(--pbv-bg,#fff);color:var(--pbv-fg,#222);font:12px sans-serif; }
-    #pbv-images span:empty { display:none; }
+    /* 普段は右下の小さな「☰」だけ。押したときだけ1行のバーを開き、縦表示は上端を下げて本文に重ねない */
+    #pbv-menu { width:34px;height:34px;padding:0!important;border-radius:50%!important;opacity:.8; }
+    #pbv-images:not(.pbv-open) { left:auto;right:4px;top:auto;bottom:60px;height:auto;padding:0; }
+    #pbv-images:not(.pbv-open) > :not(#pbv-menu):not(span) { display:none!important; }
+    #pbv-images:not(.pbv-open) > span { order:-1;max-width:70vw;animation:pbv-fade 4s forwards; }
+    @keyframes pbv-fade { 0%,70% { opacity:1; } 100% { opacity:0;visibility:hidden; } }
+    #pbv-images.pbv-open { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
     #pbv-gallery { position:fixed;left:8px;top:96px;max-height:calc(100% - 104px);z-index:2147483647;
       width:min(420px,calc(100% - 16px));box-sizing:border-box;overflow:auto;padding:8px;
       display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;align-content:start;
@@ -498,8 +496,8 @@
     active = !active;
     view.hidden = !active;
     toggle.textContent = active ? '通常表示' : '上下スクロール';
-    imageTools.classList.toggle('pbv-solid', active);
     imageTools.classList.remove('pbv-open');
+    view.classList.remove('pbv-padded');
     toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
@@ -519,7 +517,9 @@
     }
   });
   menu.addEventListener('click', () => {
-    if (!imageTools.classList.toggle('pbv-open')) gallery.hidden = true;
+    const open = imageTools.classList.toggle('pbv-open');
+    view.classList.toggle('pbv-padded', open);
+    if (!open) gallery.hidden = true;
     renderList();
   });
   list.addEventListener('click', () => {
