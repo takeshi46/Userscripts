@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.1
+// @version      1.8.2
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -188,6 +188,12 @@
     #pbv-images button:disabled { opacity:0.5;cursor:default; }
     #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
     #pbv-toggle { margin-left:auto; }
+    /* 通常表示では右下の小さな「☰」だけ。押したときだけ1行のバーを開き、本文に重ねない */
+    #pbv-menu { display:none!important;width:36px;height:36px;padding:0!important;border-radius:50%!important;opacity:.8; }
+    #pbv-images:not(.pbv-solid) #pbv-menu { display:block!important; }
+    #pbv-images:not(.pbv-solid):not(.pbv-open) { left:auto;right:6px;top:auto;bottom:60px;height:auto;padding:0; }
+    #pbv-images:not(.pbv-solid):not(.pbv-open) > :not(#pbv-menu) { display:none!important; }
+    #pbv-images.pbv-open:not(.pbv-solid) { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
     #pbv-images span { flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
       padding:2px 6px;border-radius:6px;background:var(--pbv-bg,#fff);color:var(--pbv-fg,#222);font:12px sans-serif; }
     #pbv-images span:empty { display:none; }
@@ -220,14 +226,17 @@
   imageTools.hidden = false;
   imageTools.setAttribute('aria-label', '挿絵へ移動');
   const list = document.createElement('button'), gallery = document.createElement('div');
-  const back = document.createElement('button');
+  const back = document.createElement('button'), menu = document.createElement('button');
   const status = document.createElement('span');
   gallery.id = 'pbv-gallery';
   gallery.hidden = true;
+  menu.id = 'pbv-menu';
+  menu.textContent = '☰';
+  menu.setAttribute('aria-label', '操作メニュー');
   back.textContent = '元の位置';
   back.disabled = true;
   status.setAttribute('role', 'status');
-  imageTools.append(list, back, status, toggle);
+  imageTools.append(menu, list, back, status, toggle);
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
@@ -490,6 +499,7 @@
     view.hidden = !active;
     toggle.textContent = active ? '通常表示' : '上下スクロール';
     imageTools.classList.toggle('pbv-solid', active);
+    imageTools.classList.remove('pbv-open');
     toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
@@ -507,6 +517,10 @@
       view.scrollTop = 0;
       lastScroll = 0;
     }
+  });
+  menu.addEventListener('click', () => {
+    if (!imageTools.classList.toggle('pbv-open')) gallery.hidden = true;
+    renderList();
   });
   list.addEventListener('click', () => {
     gallery.hidden = !gallery.hidden;
