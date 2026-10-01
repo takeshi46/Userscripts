@@ -4,11 +4,11 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.4.0
-// @description  本文を横書きで上下スクロール。通常表示でも挿絵へ移動し、探索済みの位置を保存。ルビ対応。
+// @version      1.5.0
+// @description  横書き・上下スクロールと挿絵ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -21,14 +21,17 @@
       if (event.origin !== 'https://books.googleusercontent.com' || event.source !== frame?.contentWindow) return;
       const url = new URL(location.href), id = url.searchParams.get('id');
       if (!id) return;
-      const key = `pbv-return:${id}`, modeKey = `pbv-mode:${id}`;
-      let bookmark, mode, savedIndex;
+      const key = `pbv-return:${id}`, modeKey = `pbv-mode:${id}`, targetKey = `pbv-target:${id}`;
+      let bookmark, mode, savedIndex, landing;
       try { bookmark = JSON.parse(sessionStorage.getItem(key) || 'null'); mode = sessionStorage.getItem(modeKey) === 'true'; } catch {}
+      try { landing = sessionStorage.getItem(targetKey); } catch {}
       try { savedIndex = JSON.parse(localStorage.getItem(`pbv-index:${id}`) || 'null'); } catch {}
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'pbv-context') {
-        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex }, event.origin);
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing }, event.origin);
+      } else if (data.type === 'pbv-landed') {
+        try { sessionStorage.removeItem(targetKey); } catch {}
       } else if (data.type === 'pbv-index') {
         const merged = { images: [], ranges: [] };
         mergeIndex(merged, savedIndex); mergeIndex(merged, data.index);
@@ -39,6 +42,10 @@
       } else if (data.type === 'pbv-goto' || data.type === 'pbv-return') {
         const pg = data.type === 'pbv-return' ? bookmark?.pg : data.pg;
         if (typeof pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(pg)) return;
+        try {
+          if (data.type === 'pbv-goto') sessionStorage.setItem(targetKey, pg);
+          else sessionStorage.removeItem(targetKey);
+        } catch {}
         try { sessionStorage.setItem(modeKey, String(data.type === 'pbv-return' ? bookmark.mode : data.mode === true)); } catch {}
         url.searchParams.set('pg', pg);
         location.assign(url.href);
@@ -46,6 +53,84 @@
     });
     return;
   }
+  const streamed = { images: [], ranges: [] };
+  let manifest, refresh = () => {};
+  // 通常のリーダーが受信した章HTMLだけを読む。通信内容やアプリのコールバックは変更しない。
+  const observed = new WeakSet(), add = MessagePort.prototype.addEventListener;
+  function receive(event) {
+    const data = event.data;
+    const info = data?.manifest || data;
+    if (info?.metadata?.volume_id && Array.isArray(info.segment)) manifest = info;
+    if (typeof data?.content !== 'string' || data.content.length > 2000000
+      || !manifest?.segment.some(s => s.label === data.current_position)) return;
+    try {
+      mergeIndex(streamed, contentIndex(data.content));
+      refresh();
+    } catch {}
+  }
+  function observe(port) {
+    if (!observed.has(port)) {
+      observed.add(port);
+      add.call(port, 'message', receive);
+    }
+  }
+  MessagePort.prototype.addEventListener = function(type, ...args) {
+    if (type === 'message') observe(this);
+    return add.call(this, type, ...args);
+  };
+  const onmessage = Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+  Object.defineProperty(MessagePort.prototype, 'onmessage', {
+    ...onmessage,
+    set(value) { if (value) observe(this); return onmessage.set.call(this, value); },
+  });
+  window.addEventListener('message', event => {
+    if (event.origin === 'https://play.google.com' && event.source === window.parent) event.ports?.forEach(observe);
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true });
+  else initialize();
+
+  function contentIndex(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const anchors = [...doc.querySelectorAll('[id]')].filter(a => order(a.id) !== null);
+    const result = { images: [], ranges: [] };
+    for (const image of doc.querySelectorAll('img, svg image')) {
+      // ponytail: 元画像の縦横200px以上を対象にする。挿絵と広告画像の区別はしない。
+      if (!(Number(image.getAttribute('width')) >= 200 && Number(image.getAttribute('height')) >= 200)) continue;
+      const before = anchors.filter(a => a.compareDocumentPosition(image) & 4).at(-1);
+      if (!before) continue;
+      // Googleの文字オフセットはDOMの文字数と一致しないため、挿絵直前の正式アンカーを使う。
+      result.images.push({ pg: before.id, order: order(before.id) });
+    }
+    if (anchors.length) result.ranges.push([order(anchors[0].id), order(anchors.at(-1).id)]);
+    return result;
+  }
+  function order(pg) {
+    const match = /^GBS\.PT(\d+)(?:[._]|$)/.exec(pg || '');
+    const value = match ? Number(match[1]) : /^GBS\.PP1(?:[._]|$)/.test(pg || '') ? 0 : null;
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  function mergeIndex(index, saved) {
+    if (!saved) return;
+    for (const item of Array.isArray(saved.images) ? saved.images : []) {
+      const pg = typeof item?.pg === 'string' ? item.pg.replace(/_\d+$/, '') : null;
+      if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
+        && Number.isSafeInteger(item.order) && item.order >= 0 && order(item.pg) === item.order
+        && !index.images.some(i => i.pg.replace(/_\d+$/, '') === pg)) index.images.push({ pg, order: item.order });
+    }
+    for (const r of Array.isArray(saved.ranges) ? saved.ranges : []) {
+      if (Array.isArray(r) && r.length === 2 && r.every(n => Number.isSafeInteger(n) && n >= 0)
+        && r[0] <= r[1] && !index.ranges.some(i => i[0] === r[0] && i[1] === r[1])) index.ranges.push(r);
+    }
+    index.images.sort((a, b) => a.order - b.order);
+    index.ranges.sort((a, b) => a[0] - b[0]);
+    index.ranges = index.ranges.reduce((merged, r) => {
+      const last = merged.at(-1);
+      if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+      else merged.push([...r]);
+      return merged;
+    }, []);
+  }
+  function initialize() {
   if (document.getElementById('pbv-toggle')) return;
   const style = document.createElement('style');
   style.textContent = `
@@ -126,20 +211,20 @@
   document.body.append(imageTools);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let seeking = false, origin = '', returnPosition;
-  let context, scanStart, pendingJump;
-  let index = { images: [], ranges: [] };
+  let context, scanStart, pendingJump, landing;
+  let index = streamed;
   const seen = new Set();
-
-  function order(pg) {
-    const match = /^GBS\.PT(\d+)(?:\.|$)/.exec(pg || '');
-    return match ? Number(match[1]) : /^GBS\.PP1(?:\.|$)/.test(pg || '') ? 0 : null;
-  }
+  refresh = () => {
+    saveIndex();
+    if (!busy && (!status.textContent || status.textContent.startsWith('画像の位置を')) && index.images.length)
+      status.textContent = `画像の位置を${index.images.length}件取得`;
+  };
   function imageLocation(page) {
     const image = [...page.querySelectorAll('img, svg image')].find(isIllustration);
     if (!image) return null;
     const anchors = [...page.querySelectorAll('[id]')].filter(a => /^GBS\./.test(a.id)
       && (a.compareDocumentPosition(image) & 4));
-    const pg = anchors.at(-1)?.id || pageLocation(page);
+    const pg = (anchors.at(-1)?.id || pageLocation(page)).replace(/_\d+$/, '');
     return order(pg) === null ? null : { pg, order: order(pg) };
   }
   function isIllustration(img) {
@@ -157,18 +242,6 @@
   function saveIndex() {
     if (!context) return;
     window.parent.postMessage({ type: 'pbv-index', index }, 'https://play.google.com');
-  }
-  function mergeIndex(index, saved) {
-    if (!saved) return;
-    for (const item of Array.isArray(saved.images) ? saved.images : []) {
-      if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
-        && order(item.pg) === item.order && !index.images.some(i => i.pg === item.pg)) index.images.push(item);
-    }
-    for (const r of Array.isArray(saved.ranges) ? saved.ranges : []) {
-      if (Array.isArray(r) && r.length === 2 && r.every(n => Number.isSafeInteger(n) && n >= 0)
-        && r[0] <= r[1] && !index.ranges.some(i => i[0] === r[0] && i[1] === r[1])) index.ranges.push(r);
-    }
-    index.images.sort((a, b) => a.order - b.order);
   }
   function rememberImages() {
     for (const page of document.querySelectorAll('reader-pages reader-page.-gb-loaded')) {
@@ -201,10 +274,14 @@
     }
     if (event.data?.type !== 'pbv-context') return;
     context = event.data;
+    if (manifest && manifest.metadata.volume_id !== context.id) return;
     mergeIndex(index, context.index);
     rememberImages();
+    if (typeof context.landing === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(context.landing))
+      landing = { signature: '', steps: 0 };
     if (context.bookmark) back.disabled = false;
     if (context.mode && !active) toggle.click();
+    if (landing) setTimeout(append, 350);
   });
   window.parent.postMessage({ type: 'pbv-context' }, 'https://play.google.com');
 
@@ -220,6 +297,7 @@
   }
   function append() {
     rememberImages();
+    if (adjustLanding()) return;
     if (!active) {
       const visible = shown(), signature = visible.map(p => p.id).join('|');
       if (seeking && signature && signature !== lastSignature) {
@@ -295,6 +373,10 @@
   }
   function finish(message) {
     clearTimeout(timeout);
+    if (landing) {
+      landing = null;
+      window.parent.postMessage({ type: 'pbv-landed' }, 'https://play.google.com');
+    }
     pendingJump = null;
     busy = false;
     if (seeking) status.textContent = message;
@@ -302,6 +384,26 @@
     cancel.disabled = true;
     prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = false;
     (direction === -1 ? prev : more).textContent = message;
+  }
+  function adjustLanding() {
+    if (!landing) return false;
+    const visible = shown();
+    if (!visible.length || visible.length !== document.querySelectorAll('reader-pages reader-page.shown').length) return true;
+    if (visible.some(page => [...page.querySelectorAll('img, svg image')].some(isIllustration))) {
+      finish('挿絵に移動しました'); status.textContent = '挿絵に移動しました'; return false;
+    }
+    const signature = visible.map(page => page.id).join('|');
+    if (signature === landing.signature) return true;
+    // アンカー直後の画像が次の見開きに送られた場合だけ、最大2回補正する。
+    if (landing.steps >= 2) {
+      finish('挿絵の直前に移動しました'); status.textContent = '挿絵の直前に移動しました'; return false;
+    }
+    landing.signature = signature; landing.steps++;
+    busy = true; direction = 1;
+    imagePrev.disabled = imageNext.disabled = true; cancel.disabled = false;
+    status.textContent = '挿絵の表示位置を調整…';
+    step();
+    return true;
   }
   function step() {
     const label = direction === -1 ? '前のページ' : '次のページ';
@@ -358,7 +460,7 @@
       cancel.disabled = false;
       prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = true;
       status.textContent = '挿絵を探しています…';
-      // ponytail: 初めて読む範囲だけ標準ページ送りで探索し、記録済み範囲は直接移動する。
+      // ponytail: 章データを受信できない範囲では、標準ページ送りで探索する。
       step();
     };
     if (context) {
@@ -433,4 +535,5 @@
     startup.observe(document.body, { childList: true, subtree: true });
   }
   window.addEventListener('resize', resize);
+  }
 })();
