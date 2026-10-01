@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.3
+// @version      1.8.4
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -154,6 +154,7 @@
     #pbv-view.pbv-padded { inset:92px 0 0; }
     #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
+    @media (max-width:600px) { #pbv-pages { padding:0 6px; } }
     #pbv-pages > .pbv-sheet { flex:none;position:relative;display:block;
       overflow:hidden;background:transparent; }
     #pbv-pages > .pbv-horizontal { width:min(900px,100%)!important;height:auto!important;
@@ -342,9 +343,11 @@
       .filter(p => p.classList.contains('-gb-loaded') && p.querySelector('reader-rendered-page'));
   }
   function resize() {
+    // 画像ページは、左右の余白（画面幅で変わる）を除いた幅に収める。
+    const padding = parseFloat(getComputedStyle(pages).paddingLeft) * 2;
     for (const sheet of pages.children) {
       sheet.style.zoom = sheet.classList.contains('pbv-horizontal') ? '1'
-        : String(Math.min(1, (view.clientWidth - 32) / Number(sheet.dataset.width)));
+        : String(Math.min(1, (view.clientWidth - padding - 4) / Number(sheet.dataset.width)));
     }
   }
   // リーダーが今表示している本文の文字色・書体・サイズ・背景を、縦表示へ反映する。
