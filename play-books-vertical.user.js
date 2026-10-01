@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.7.1
+// @version      1.7.2
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -343,7 +343,12 @@
     const height = view.scrollHeight, top = view.scrollTop;
     const visible = shown();
     const signature = visible.map(p => p.id).join('|');
-    let added = false;
+    let added = false, reset = false;
+    if (!busy && seen.size && visible.length && visible.every(p => !seen.has(p.id))) {
+      // 目次やリンクでリーダーが離れた位置へ移動した。縦表示を作り直す。
+      pages.replaceChildren(); seen.clear(); ended = {};
+      reset = true;
+    }
     // ponytail: 保持ページ数に比例してメモリを使う。長時間読む場合は表示を一度閉じて再開。
     for (const source of visible) {
       if (seen.has(source.id)) continue;
@@ -360,6 +365,8 @@
       sheet.style.cssText = `width:${rect.width}px;height:${rect.height}px;direction:${getComputedStyle(source).direction}`;
       for (const el of [sheet, ...sheet.querySelectorAll('[id]')]) el.removeAttribute('id');
       sheet.querySelectorAll('reader-page-overlay, reader-icon-overlay, script').forEach(el => el.remove());
+      // 複製したリンクはリーダー本来の処理を失うので、クリック時に元のリンクを探せるよう印を付ける。
+      sheet.querySelectorAll('a').forEach((a, i) => { a.dataset.pbvPage = source.id; a.dataset.pbvIndex = i; });
       const after = [...pages.children].find(p => p.dataset.page.localeCompare(source.id, undefined, { numeric: true }) > 0);
       pages.insertBefore(sheet, after || null);
       seen.add(source.id);
@@ -384,13 +391,14 @@
       list.disabled = false;
       if (status.textContent.startsWith('本文の読み込み')) status.textContent = '';
       resize();
+      if (reset) { direction = 1; view.scrollTop = 0; }
       if (focusImage) {
         // 着地直後は、挿絵が画面に入るようにスクロールする。
         focusImage = false;
         const img = [...pages.querySelectorAll('img, svg')].find(el => el.getBoundingClientRect().width >= 200);
         if (img) view.scrollTop += img.getBoundingClientRect().top - view.getBoundingClientRect().top - 64;
       }
-      if (direction === -1) view.scrollTop = top + view.scrollHeight - height;
+      if (!reset && direction === -1) view.scrollTop = top + view.scrollHeight - height;
       lastScroll = view.scrollTop;
       fill();
     } else if (busy && signature && signature !== lastSignature) {
@@ -484,6 +492,17 @@
     renderList();
     gotoImage(pg);
   });
+  // 複製ページのリンクをそのまま開くと403になる。既定の遷移を止め、リーダー内の元のリンクを押し直す。
+  pages.addEventListener('click', event => {
+    const link = event.target.closest?.('a');
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = [...document.querySelectorAll('reader-pages reader-page')].find(p => p.id === link.dataset.pbvPage);
+    const original = source?.querySelectorAll('a')[Number(link.dataset.pbvIndex)];
+    if (original) original.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    else status.textContent = 'このリンクは通常表示で開いてください';
+  }, true);
   cancel.addEventListener('click', () => finish('調整を停止しました'));
   back.addEventListener('click', () => {
     if (context) window.parent.postMessage({ type: 'pbv-return' }, 'https://play.google.com');
