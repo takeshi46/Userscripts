@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Google Play Books 上下スクロール
 // @namespace    local.playbooks.vertical
-// @homepageURL  https://github.com/takeshi46/userscripts
-// @downloadURL  https://raw.githubusercontent.com/takeshi46/userscripts/main/play-books-vertical.user.js
-// @updateURL    https://raw.githubusercontent.com/takeshi46/userscripts/main/play-books-vertical.user.js
-// @version      1.2.0
+// @homepageURL  https://github.com/takeshi46/Userscripts
+// @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
+// @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
+// @version      1.3.0
 // @description  本文を横書きにして、現在位置から上下スクロールで読みます。ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @run-at       document-idle
@@ -49,6 +49,15 @@
     #pbv-more, #pbv-prev { display:block;margin:16px auto 32px;padding:12px 24px;
       font:16px sans-serif;cursor:pointer; }
     #pbv-prev { margin-top:52px; }
+    #pbv-images { position:fixed;left:12px;top:64px;z-index:2147483647;
+      display:flex;flex-wrap:wrap;gap:6px;max-width:calc(100% - 160px); }
+    #pbv-images[hidden] { display:none!important; }
+    #pbv-images button { padding:9px;border:1px solid #888;border-radius:8px;
+      background:#fff;color:#222;cursor:pointer;font:14px sans-serif; }
+    #pbv-images button:disabled { opacity:0.5;cursor:default; }
+    #pbv-images span { align-self:center;font:14px sans-serif; }
+    #pbv-pages .pbv-horizontal svg { display:block;width:100%!important;
+      height:auto!important;max-width:100%; }
   `;
   document.head.append(style);
   const toggle = document.createElement('button');
@@ -69,7 +78,21 @@
   prev.textContent = '前のページを追加';
   view.append(prev, pages, more);
   document.body.append(toggle, view);
+  const imageTools = document.createElement('nav');
+  imageTools.id = 'pbv-images';
+  imageTools.hidden = true;
+  imageTools.setAttribute('aria-label', '挿絵へ移動');
+  const imagePrev = document.createElement('button'), imageNext = document.createElement('button');
+  const cancel = document.createElement('button'), back = document.createElement('button');
+  const status = document.createElement('span');
+  imagePrev.textContent = '前の挿絵'; imageNext.textContent = '次の挿絵';
+  cancel.textContent = '探索停止'; back.textContent = '元の位置へ';
+  cancel.disabled = back.disabled = true;
+  status.setAttribute('role', 'status');
+  imageTools.append(imagePrev, imageNext, cancel, back, status);
+  document.body.append(imageTools);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
+  let seeking = false, origin = '', returnPosition;
   const seen = new Set();
 
   function shown() {
@@ -99,6 +122,11 @@
       if (source.classList.contains('text-mode')) sheet.classList.add('pbv-horizontal');
       sheet.dataset.width = String(rect.width);
       sheet.dataset.page = source.id;
+      // ponytail: 200px以上の画像を挿絵と判定。画像主体の本では各ページが対象になる。
+      sheet.dataset.illustration = String([...source.querySelectorAll('img, svg image')].some(img => {
+        const rect = img.getBoundingClientRect();
+        return rect.width >= 200 && rect.height >= 200;
+      }));
       const segment = source.querySelector('.gb-segment');
       sheet.dataset.continues = String(/\+[1-9]\d*$/.test(segment?.getAttribute('ocean-position') || ''));
       sheet.style.cssText = `width:${rect.width}px;height:${rect.height}px;direction:${getComputedStyle(source).direction}`;
@@ -124,13 +152,18 @@
         }
       }
       clearTimeout(timeout);
-      busy = false;
-      prev.disabled = more.disabled = false;
+      busy = seeking;
+      prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = busy;
       prev.textContent = '前のページを追加';
       more.textContent = '次のページを追加';
       resize();
       if (direction === -1) view.scrollTop = top + view.scrollHeight - height;
       lastScroll = view.scrollTop;
+      if (seeking) {
+        const target = findIllustration();
+        if (target) { finish('挿絵に移動しました'); scrollToSheet(target); }
+        else step();
+      }
     } else if (busy && signature && signature !== lastSignature) {
       step();
     }
@@ -138,7 +171,10 @@
   function finish(message) {
     clearTimeout(timeout);
     busy = false;
-    prev.disabled = more.disabled = false;
+    if (seeking) status.textContent = message;
+    seeking = false;
+    cancel.disabled = true;
+    prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = false;
     (direction === -1 ? prev : more).textContent = message;
   }
   function step() {
@@ -159,18 +195,50 @@
     if (!active || busy) return;
     direction = value;
     busy = true;
-    prev.disabled = more.disabled = true;
+    prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = true;
     (direction === -1 ? prev : more).textContent = '読み込み中…';
+    step();
+  }
+  function scrollToSheet(sheet, offset = 0) {
+    const relative = sheet.getBoundingClientRect().top - view.getBoundingClientRect().top;
+    view.scrollTop += relative - 64 + offset;
+    lastScroll = view.scrollTop;
+  }
+  function findIllustration() {
+    const candidates = [...pages.children].filter(sheet => sheet.dataset.illustration === 'true'
+      && Math.sign(sheet.dataset.page.localeCompare(origin, undefined, { numeric: true })) === direction);
+    return direction === -1 ? candidates.at(-1) : candidates[0];
+  }
+  function jumpIllustration(value) {
+    if (!active || busy) return;
+    const current = [...pages.children].find(sheet => sheet.getBoundingClientRect().bottom > view.getBoundingClientRect().top + 64)
+      || pages.children[0];
+    if (!current) { status.textContent = '本文の読み込みを待っています'; return; }
+    direction = value;
+    origin = current.dataset.page;
+    returnPosition = { sheet: current, offset: view.getBoundingClientRect().top + 64 - current.getBoundingClientRect().top };
+    back.disabled = false;
+    const target = findIllustration();
+    if (target) { scrollToSheet(target); status.textContent = '挿絵に移動しました'; return; }
+    seeking = busy = true;
+    cancel.disabled = false;
+    prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = true;
+    status.textContent = '挿絵を探しています…';
+    // ponytail: 未読の挿絵は標準ページ送りで探索するため、遠い場合は時間がかかる。
     step();
   }
   toggle.addEventListener('click', () => {
     active = !active;
     view.hidden = !active;
+    imageTools.hidden = !active;
     toggle.textContent = active ? '通常表示に戻す' : '上下スクロール';
     toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
-    prev.disabled = more.disabled = false;
+    seeking = false;
+    cancel.disabled = back.disabled = true;
+    status.textContent = '';
+    prev.disabled = more.disabled = imagePrev.disabled = imageNext.disabled = false;
     if (active) {
       pages.replaceChildren();
       seen.clear();
@@ -185,6 +253,17 @@
   });
   more.addEventListener('click', () => load(1));
   prev.addEventListener('click', () => load(-1));
+  imagePrev.addEventListener('click', () => jumpIllustration(-1));
+  imageNext.addEventListener('click', () => jumpIllustration(1));
+  cancel.addEventListener('click', () => finish('探索を停止しました'));
+  back.addEventListener('click', () => {
+    if (!returnPosition) return;
+    finish('元の位置に戻りました');
+    status.textContent = '元の位置に戻りました';
+    prev.textContent = '前のページを追加';
+    more.textContent = '次のページを追加';
+    scrollToSheet(returnPosition.sheet, returnPosition.offset);
+  });
   view.addEventListener('scroll', () => {
     const delta = view.scrollTop - lastScroll;
     lastScroll = view.scrollTop;
