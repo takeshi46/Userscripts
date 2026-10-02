@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.7
+// @version      1.8.8
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -176,6 +176,10 @@
     /* 文字色・書体・サイズ・背景はリーダーの設定を読み取って反映する（syncTheme） */
     #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal .gb-segment {
       color:var(--pbv-fg,inherit)!important;font-family:var(--pbv-font,inherit)!important; }
+    /* ダークモード等でリーダー側が個別に付けた文字色・背景・フィルターは、複製側では使わず統一する */
+    #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal :not(img):not(svg):not(svg *) {
+      color:var(--pbv-fg,inherit)!important;-webkit-text-fill-color:var(--pbv-fg,currentcolor)!important;
+      background:none!important;text-shadow:none!important;filter:none!important;mix-blend-mode:normal!important; }
     #pbv-pages .pbv-horizontal .gb-segment { font-size:var(--pbv-size,18px)!important; }
     #pbv-pages .pbv-horizontal [style*="display:none"],
     #pbv-pages .pbv-horizontal [style*="display: none"] { display:none!important; }
