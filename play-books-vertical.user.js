@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.6
+// @version      1.8.7
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -194,7 +194,7 @@
     #pbv-images span:empty { display:none; }
     /* 普段は右下の小さな「☰」だけ。押したときだけ1行のバーを開き、縦表示は上端を下げて本文に重ねない */
     #pbv-menu { width:34px;height:34px;padding:0!important;border-radius:50%!important;opacity:.8; }
-    #pbv-images:not(.pbv-open) #pbv-menu { opacity:.3; }
+    #pbv-images:not(.pbv-open) #pbv-menu { opacity:.5; }
     #pbv-images:not(.pbv-open) { left:auto;right:4px;top:auto;bottom:60px;height:auto;padding:0; }
     #pbv-images:not(.pbv-open) > :not(#pbv-menu):not(span) { display:none!important; }
     #pbv-images:not(.pbv-open) > span { order:-1;max-width:70vw;animation:pbv-fade 4s forwards; }
