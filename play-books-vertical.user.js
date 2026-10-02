@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.5
+// @version      1.8.6
 // @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -185,10 +185,13 @@
       display:flex;align-items:center;gap:6px;padding:0 8px;pointer-events:none; }
     #pbv-images > * { pointer-events:auto; }
     #pbv-images button { flex:none;min-height:30px;padding:0 10px;border:1px solid #8886;border-radius:8px;
-      background:var(--pbv-bg,#fff);color:var(--pbv-fg,#222);cursor:pointer;font:13px sans-serif;white-space:nowrap; }
+      background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);cursor:pointer;font:13px sans-serif;white-space:nowrap; }
     #pbv-images button:disabled { opacity:0.5;cursor:default; }
     #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
     #pbv-toggle { margin-left:auto; }
+    #pbv-images span { flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      padding:2px 6px;border-radius:6px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);font:12px sans-serif; }
+    #pbv-images span:empty { display:none; }
     /* 普段は右下の小さな「☰」だけ。押したときだけ1行のバーを開き、縦表示は上端を下げて本文に重ねない */
     #pbv-menu { width:34px;height:34px;padding:0!important;border-radius:50%!important;opacity:.8; }
     #pbv-images:not(.pbv-open) #pbv-menu { opacity:.3; }
@@ -203,7 +206,7 @@
       background:var(--pbv-bg,#fff);border:1px solid #1a73e8;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.25); }
     #pbv-gallery[hidden] { display:none!important; }
     #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #8886;
-      border-radius:6px;background:transparent;color:var(--pbv-fg,#222);cursor:pointer;font:12px sans-serif; }
+      border-radius:6px;background:transparent;color:var(--pbv-ui,#222);cursor:pointer;font:12px sans-serif; }
     #pbv-gallery img { width:100%;aspect-ratio:3/4;object-fit:cover;background:#8884; }
     #pbv-pages .pbv-horizontal svg { display:block;width:100%!important;
       height:auto!important;max-width:100%; }
@@ -366,10 +369,16 @@
     }
     const [r, g, b] = rgb(style.color);
     // 背景が取れず文字が明るい場合は、読めなくならないよう暗い背景にする。
-    bg ||= (r + g + b) / 3 > 128 ? '#111' : '#fff';
+    bg ||= (r + g + b) / 3 > 128 ? 'rgb(17, 17, 17)' : 'rgb(255, 255, 255)';
+    // 背景と文字を別々の要素から読むため食い違うことがある。追加UIは常に背景に対して読める色にし、
+    // 本文も文字色が背景と近すぎる場合はその色に置き換える。
+    const lum = ([x, y, z]) => (0.2126 * x + 0.7152 * y + 0.0722 * z) / 255;
+    const ui = lum(rgb(bg)) > 0.5 ? '#222' : '#eee';
+    const fg = Math.abs(lum(rgb(bg)) - lum([r, g, b])) >= 0.4 ? style.color : ui;
     for (const el of [view, imageTools, gallery]) {
       el.style.setProperty('--pbv-bg', bg);
-      el.style.setProperty('--pbv-fg', style.color);
+      el.style.setProperty('--pbv-ui', ui);
+      el.style.setProperty('--pbv-fg', fg);
       el.style.setProperty('--pbv-font', style.fontFamily);
       if (size >= 10 && size <= 60) el.style.setProperty('--pbv-size', `${size}px`);
     }
