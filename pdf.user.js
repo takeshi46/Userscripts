@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.7
+// @version      1.5.8
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -9,34 +9,34 @@
 // @match        *://pdftoshokan.com/*
 // @match        *://*.pdftoshokan.com/*
 // @run-at       document-start
-// @grant        none
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    function pageMain() {
-        'use strict';
+    // v1.5.8: Run against the real page window through unsafeWindow instead of
+    // injecting an inline <script>. This avoids intermittent CSP/injection failures.
+    const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-        if (window.__pdfAdguardMain) {
-            return;
-        }
-        window.__pdfAdguardMain = true;
+    function installPageGuards(w) {
+        if (w.__pdfAdguardMain) return;
+        w.__pdfAdguardMain = true;
 
-        const nativeOpen = window.open;
-        const isMangaPage = /\/manga\//.test(location.pathname);
+        const nativeOpen = w.open;
+        const isMangaPage = /\/manga\//.test(w.location.pathname);
 
         const isSameSite = function (value) {
             if (!value) return false;
             try {
-                const url = new URL(value, location.href);
+                const url = new URL(value, w.location.href);
                 return url.hostname === 'pdftoshokan.com' || url.hostname.endsWith('.pdftoshokan.com');
             } catch (e) {
                 return false;
             }
         };
 
-        window.open = function (url, target, features) {
+        w.open = function (url, target, features) {
             let value = '';
             try {
                 value = String(url || '');
@@ -50,7 +50,7 @@
             }
 
             if (url && isSameSite(url)) {
-                return nativeOpen.call(window, url, target, features);
+                return nativeOpen.call(w, url, target, features);
             }
 
             return null;
@@ -89,7 +89,7 @@
             event.stopImmediatePropagation();
         }, true);
 
-        if (/\/pdf\/view332\/web\//.test(location.pathname)) {
+        if (/\/pdf\/view332\/web\//.test(w.location.pathname)) {
             function getStorageKey() {
                 const raw = navigator.userAgent + navigator.language;
                 let hash = 0;
@@ -106,46 +106,34 @@
 
             function refreshAdTimer() {
                 try {
-                    localStorage.setItem(storageKey, String(Date.now()));
+                    w.localStorage.setItem(storageKey, String(Date.now()));
                 } catch (e) {}
             }
 
             refreshAdTimer();
-            setInterval(refreshAdTimer, 60000);
+            w.setInterval(refreshAdTimer, 60000);
         }
     }
+
+    installPageGuards(pageWindow);
 
     // Empty shells left behind when AdGuard blocks the ads (list grid cells, banner containers).
     const adStyle = document.createElement('style');
     adStyle.textContent =
         '#ad-container,#ad-containerx,#ad-container1,iframe.ads-iframe,iframe#myIframe,iframe#myIframe2{display:none!important}' +
         '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}';
-    (document.head || document.documentElement).appendChild(adStyle);
 
-    const inject = function () {
-        const root = document.documentElement || document.head;
-        if (!root) {
-            return false;
-        }
-
-        const script = document.createElement('script');
-        script.textContent = '(' + pageMain.toString() + ')();';
-        root.appendChild(script);
-        script.remove();
+    const appendStyle = function () {
+        const root = document.head || document.documentElement;
+        if (!root) return false;
+        root.appendChild(adStyle);
         return true;
     };
 
-    if (!inject()) {
+    if (!appendStyle()) {
         const observer = new MutationObserver(function () {
-            if (inject()) {
-                observer.disconnect();
-            }
+            if (appendStyle()) observer.disconnect();
         });
-
-        observer.observe(document, {
-            childList: true,
-            subtree: true
-        });
+        observer.observe(document, { childList: true, subtree: true });
     }
 })();
-
