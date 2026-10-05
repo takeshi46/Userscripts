@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.8
+// @version      1.5.9
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -36,25 +36,30 @@
             }
         };
 
-        window.open = function (url, target, features) {
-            let value = '';
-            try {
-                value = String(url || '');
-            } catch (e) {}
+        // Proxy, not a plain function: the site checks Function.prototype.toString.call(window.open)
+        // for "[native code]" and shows the volume-change ad whenever it has been replaced.
+        window.open = new Proxy(nativeOpen, {
+            apply: function (target, thisArg, args) {
+                const url = args[0];
+                let value = '';
+                try {
+                    value = String(url || '');
+                } catch (e) {}
 
-            if (
-                isMangaPage &&
-                (value === 'window.location.href' || value.endsWith('/manga/window.location.href'))
-            ) {
+                if (
+                    isMangaPage &&
+                    (value === 'window.location.href' || value.endsWith('/manga/window.location.href'))
+                ) {
+                    return null;
+                }
+
+                if (url && isSameSite(url)) {
+                    return Reflect.apply(target, window, args);
+                }
+
                 return null;
             }
-
-            if (url && isSameSite(url)) {
-                return nativeOpen.call(window, url, target, features);
-            }
-
-            return null;
-        };
+        });
 
         document.addEventListener('click', function (event) {
             const target = event.target;
@@ -90,7 +95,7 @@
         }, true);
 
         if (/\/pdf\/view332\/web\//.test(location.pathname)) {
-            function getStorageKey() {
+            function getStorageKeys() {
                 const raw = navigator.userAgent + navigator.language;
                 let hash = 0;
 
@@ -99,14 +104,16 @@
                     hash |= 0;
                 }
 
-                return 'viewad_' + Math.abs(hash);
+                // site renamed the key from viewad_ to v2_; keep both fresh
+                return ['viewad_' + Math.abs(hash), 'v2_' + Math.abs(hash)];
             }
 
-            const storageKey = getStorageKey();
+            const storageKeys = getStorageKeys();
 
             function refreshAdTimer() {
                 try {
-                    localStorage.setItem(storageKey, String(Date.now()));
+                    const now = String(Date.now());
+                    storageKeys.forEach(function (key) { localStorage.setItem(key, now); });
                 } catch (e) {}
             }
 
