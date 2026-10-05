@@ -1,6 +1,6 @@
 # Userscripts
 
-AdGuardで使えるユーザースクリプト集です。
+自分のAdGuard環境で使っているものなので広告関係の挙動は注意
 
 ## Google Play ブックス：横書き・上下スクロール
 
