@@ -36,7 +36,7 @@ https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical
 
 ## PDF閲覧：広告遷移防止
 
-`pdf.user.js` — v1.5.7
+`pdf.user.js` — v1.5.8
 
 ### 機能
 
@@ -62,4 +62,4 @@ AdGuard Windows版では「拡張機能 → 拡張機能を追加 → ファイ�
 
 ## 現在のバージョン
 
-PDF: v1.5.7 / Play ブックス: v1.8.8
+PDF: v1.5.8 / Play ブックス: v1.8.8

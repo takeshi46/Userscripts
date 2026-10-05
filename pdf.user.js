@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.7
+// @version      1.5.8
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -112,6 +112,12 @@
 
             refreshAdTimer();
             setInterval(refreshAdTimer, 60000);
+            // Background tabs get frozen (no timers): also refresh right before any interaction
+            // and on resume, so the site's "120s since last ad" check in the volume menu never trips.
+            ['pointerdown', 'touchstart', 'click', 'keydown', 'visibilitychange', 'focus', 'pageshow', 'resume']
+                .forEach(function (type) {
+                    window.addEventListener(type, refreshAdTimer, true);
+                });
         }
     }
 
