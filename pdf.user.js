@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.12
+// @version      1.5.13
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -108,16 +108,26 @@
                 hash |= 0;
             }
 
-            const id = Math.abs(hash);
-            return ['he' + id, 'vi12_cd_' + id, 'v2_' + id, 'viewad_' + id];
+            return Math.abs(hash);
         };
 
-        const storageKeys = getStorageKeys();
+        const timerId = String(getStorageKeys());
+        // Known timer keys: list click "he", reader button "vi12_cd_" (inline) and "vi12_d_" (sin.js),
+        // viewer volume menu/download "v2_" and the older "viewad_".
+        const knownKeys = ['he', 'vi12_cd_', 'vi12_d_', 'v2_', 'viewad_'].map(function (p) { return p + timerId; });
 
         const refreshAdTimer = function () {
             try {
                 const now = String(Date.now());
-                storageKeys.forEach(function (key) { localStorage.setItem(key, now); });
+                knownKeys.forEach(function (key) { localStorage.setItem(key, now); });
+                // The site renames its keys from time to time: also refresh any other numeric
+                // timestamp stored under "<something><this browser's id>".
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.endsWith(timerId) && /^\d{10,}$/.test(localStorage.getItem(key))) {
+                        localStorage.setItem(key, now);
+                    }
+                }
             } catch (e) {}
         };
 
