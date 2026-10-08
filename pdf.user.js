@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.9
+// @version      1.5.10
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -132,7 +132,9 @@
     const adStyle = document.createElement('style');
     adStyle.textContent =
         '#ad-container,#ad-containerx,#ad-container1,iframe.ads-iframe,iframe#myIframe,iframe#myIframe2{display:none!important}' +
-        '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}';
+        '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}' +
+        // AdGuard Popup Blocker's "blocked N popups" notice is a script-created <div> appended directly to <html>.
+        'html>div{display:none!important}';
     (document.head || document.documentElement).appendChild(adStyle);
 
     const inject = function () {
