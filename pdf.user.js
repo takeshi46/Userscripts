@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.11
+// @version      1.5.12
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -94,38 +94,40 @@
             event.stopImmediatePropagation();
         }, true);
 
-        if (/\/pdf\/view332\/web\//.test(location.pathname)) {
-            function getStorageKeys() {
-                const raw = navigator.userAgent + navigator.language;
-                let hash = 0;
+        // The site only opens its ad popup / ad redirect when its per-browser timer key is stale
+        // (list click: "he", reader button: "vi12_cd_", viewer volume menu/download: "v2_" and the old
+        // "viewad_"). Those window.open calls come from document-level handlers, which AdGuard Popup
+        // Blocker rejects (and notifies about). Keeping the timers fresh makes the site take its
+        // plain same-tab path instead, so nothing is ever blocked.
+        const getStorageKeys = function () {
+            const raw = navigator.userAgent + navigator.language;
+            let hash = 0;
 
-                for (let i = 0; i < raw.length; i++) {
-                    hash = ((hash << 5) - hash) + raw.charCodeAt(i);
-                    hash |= 0;
-                }
-
-                // site renamed the key from viewad_ to v2_; keep both fresh
-                return ['viewad_' + Math.abs(hash), 'v2_' + Math.abs(hash)];
+            for (let i = 0; i < raw.length; i++) {
+                hash = ((hash << 5) - hash) + raw.charCodeAt(i);
+                hash |= 0;
             }
 
-            const storageKeys = getStorageKeys();
+            const id = Math.abs(hash);
+            return ['he' + id, 'vi12_cd_' + id, 'v2_' + id, 'viewad_' + id];
+        };
 
-            function refreshAdTimer() {
-                try {
-                    const now = String(Date.now());
-                    storageKeys.forEach(function (key) { localStorage.setItem(key, now); });
-                } catch (e) {}
-            }
+        const storageKeys = getStorageKeys();
 
-            refreshAdTimer();
-            setInterval(refreshAdTimer, 60000);
-            // Background tabs get frozen (no timers): also refresh right before any interaction
-            // and on resume, so the site's "120s since last ad" check in the volume menu never trips.
-            ['pointerdown', 'touchstart', 'click', 'keydown', 'visibilitychange', 'focus', 'pageshow', 'resume']
-                .forEach(function (type) {
-                    window.addEventListener(type, refreshAdTimer, true);
-                });
-        }
+        const refreshAdTimer = function () {
+            try {
+                const now = String(Date.now());
+                storageKeys.forEach(function (key) { localStorage.setItem(key, now); });
+            } catch (e) {}
+        };
+
+        refreshAdTimer();
+        setInterval(refreshAdTimer, 60000);
+        // Background tabs get frozen (no timers): also refresh right before any interaction and on resume.
+        ['pointerdown', 'touchstart', 'click', 'keydown', 'visibilitychange', 'focus', 'pageshow', 'resume']
+            .forEach(function (type) {
+                window.addEventListener(type, refreshAdTimer, true);
+            });
     }
 
     // Empty shells left behind when AdGuard blocks the ads (list grid cells, banner containers).
@@ -134,27 +136,6 @@
         '#ad-container,#ad-containerx,#ad-container1,iframe.ads-iframe,iframe#myIframe,iframe#myIframe2{display:none!important}' +
         '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}';
     (document.head || document.documentElement).appendChild(adStyle);
-
-    // AdGuard Popup Blocker's "blocked N popups" notice is a <div> it appends directly to <html>
-    // (closed shadow root, so CSS cannot hide it). Nothing legitimate lives there: remove it on arrival.
-    const dropNotice = function () {
-        const root = document.documentElement;
-        if (!root) return false;
-        new MutationObserver(function (mutations) {
-            mutations.forEach(function (m) {
-                m.addedNodes.forEach(function (n) {
-                    if (n.nodeName === 'DIV') n.remove();
-                });
-            });
-        }).observe(root, { childList: true });
-        return true;
-    };
-    if (!dropNotice()) {
-        const rootWatcher = new MutationObserver(function () {
-            if (dropNotice()) rootWatcher.disconnect();
-        });
-        rootWatcher.observe(document, { childList: true });
-    }
 
     const inject = function () {
         const root = document.documentElement || document.head;
