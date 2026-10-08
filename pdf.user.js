@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         PDF 広告遷移防止 統合版
-// @version      1.5.10
+// @version      1.5.11
 // @description  外部ポップアップ防止・1クリックPDF表示・PDFビューアの巻変更広告を防止
 // @namespace    https://github.com/takeshi46/pdf
 // @homepageURL  https://github.com/takeshi46/Userscripts
@@ -132,10 +132,29 @@
     const adStyle = document.createElement('style');
     adStyle.textContent =
         '#ad-container,#ad-containerx,#ad-container1,iframe.ads-iframe,iframe#myIframe,iframe#myIframe2{display:none!important}' +
-        '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}' +
-        // AdGuard Popup Blocker's "blocked N popups" notice is a script-created <div> appended directly to <html>.
-        'html>div{display:none!important}';
+        '.post:has(>iframe.ads-iframe),.post:has(>iframe#myIframe),.post:has(>iframe#myIframe2){display:none!important}';
     (document.head || document.documentElement).appendChild(adStyle);
+
+    // AdGuard Popup Blocker's "blocked N popups" notice is a <div> it appends directly to <html>
+    // (closed shadow root, so CSS cannot hide it). Nothing legitimate lives there: remove it on arrival.
+    const dropNotice = function () {
+        const root = document.documentElement;
+        if (!root) return false;
+        new MutationObserver(function (mutations) {
+            mutations.forEach(function (m) {
+                m.addedNodes.forEach(function (n) {
+                    if (n.nodeName === 'DIV') n.remove();
+                });
+            });
+        }).observe(root, { childList: true });
+        return true;
+    };
+    if (!dropNotice()) {
+        const rootWatcher = new MutationObserver(function () {
+            if (dropNotice()) rootWatcher.disconnect();
+        });
+        rootWatcher.observe(document, { childList: true });
+    }
 
     const inject = function () {
         const root = document.documentElement || document.head;
